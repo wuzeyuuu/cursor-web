@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>Cursor CLI</title>
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --card:#1a1d24; --line:#2a2f3a; --txt:#e8eaed; --muted:#9aa3b2; --acc:#7aa2f7; --ok:#9ece6a; --bad:#f7768e; }
+  * { box-sizing: border-box; }
+  html, body { height:100%; height:100dvh; overflow:hidden; }
+  body { margin:0; display:flex; flex-direction:column; font-family: ui-sans-serif, system-ui, sans-serif; font-size:12px; background:var(--bg); color:var(--txt); }
+  header { padding:6px 10px 5px; border-bottom:1px solid var(--line); flex-shrink:0; }
+  h1 { font-size:13px; margin:0 0 1px; font-weight:600; }
+  .sub { color:var(--muted); font-size:10px; line-height:1.3; }
+  main { flex:1; min-height:0; padding:0; display:flex; flex-direction:column; overflow:hidden; }
+  .layout { display:flex; flex:1; min-height:0; overflow:hidden; flex-direction:column; }
+  @media (min-width:768px) { .layout { flex-direction:row; } }
+  #sidebar { border-bottom:1px solid var(--line); background:#12151b; display:flex; flex-direction:column; min-height:0; overflow:hidden; flex-shrink:0; }
+  @media (min-width:768px) { #sidebar { width:min(280px,34vw); height:100%; max-height:none; border-bottom:0; border-right:1px solid var(--line); } }
+  .sheet-handle { display:none; flex-shrink:0; }
+  #sessionBackdrop { display:none; }
+  #sessionsToggle { display:none; }
+  #closeSessions { display:none; }
+  .sidebar-head { display:flex; justify-content:space-between; align-items:center; padding:5px 8px; border-bottom:1px solid var(--line); background:#12151b; z-index:1; gap:6px; flex-shrink:0; }
+  .sidebar-head span { font-size:11px; font-weight:600; }
+  .sidebar-head button { padding:3px 7px; font-size:11px; }
+  #sendBtn { min-width:52px; min-height:36px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+  #sendBtn .stop-icon { display:none; width:12px; height:12px; border-radius:2px; background:currentColor; }
+  #sendBtn.stop { background:var(--bad); color:#fff; }
+  #sendBtn.stop .send-label { display:none; }
+  #sendBtn.stop .stop-icon { display:block; }
+  #sessionList { padding:3px; flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+  .session-item { width:100%; text-align:left; background:transparent; color:var(--txt); border:1px solid transparent; border-radius:7px; padding:5px 7px; margin-bottom:2px; font-weight:400; }
+  .session-item.active { background:#243044; border-color:#35507a; }
+  .session-item .title { font-size:11px; line-height:1.25; margin-bottom:1px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .session-item .meta { font-size:9px; color:var(--muted); }
+  .chat-pane { flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden; padding:6px 8px calc(76px + env(safe-area-inset-bottom)); }
+  #chatHead { font-size:10px; color:var(--muted); margin-bottom:4px; padding-bottom:4px; border-bottom:1px solid var(--line); line-height:1.3; }
+  #chatHead strong { color:var(--txt); font-size:11px; }
+  #loadMore { text-align:center; margin:3px 0; }
+  #loadMore button { font-size:10px; padding:4px 8px; }
+  .empty { color:var(--muted); font-size:11px; padding:12px 4px; text-align:center; }
+  .row { display:flex; gap:5px; margin:5px 0; }
+  input, select, textarea { width:100%; background:var(--card); color:var(--txt); border:1px solid var(--line); border-radius:7px; padding:6px 8px; font-size:12px; }
+  button { background:var(--acc); color:#0b1020; border:0; border-radius:7px; padding:6px 9px; font-size:12px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--txt); border:1px solid var(--line); }
+  .status { font-size:10px; color:var(--muted); margin-top:1px; }
+  .status.ok { color:var(--ok); } .status.bad { color:var(--bad); }
+  #taskStatus { display:flex; align-items:center; gap:6px; padding:5px 10px; border-bottom:1px solid var(--line); font-size:10px; background:#12151b; flex-shrink:0; }
+  #taskStatus .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; background:var(--muted); }
+  #taskStatus.running .dot { background:var(--acc); animation:pulse 1.2s ease-in-out infinite; }
+  #taskStatus.success .dot { background:var(--ok); }
+  #taskStatus.error .dot { background:var(--bad); }
+  #taskStatus.stopped .dot { background:#c0caf5; }
+  #taskStatus.idle .dot { background:var(--muted); opacity:.6; }
+  #taskStatus .label { font-weight:600; }
+  #taskStatus .detail { color:var(--muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+  #log { display:flex; flex-direction:column; gap:5px; flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-bottom:4px; font-size:12px; }
+  .msg { padding:6px 8px; border-radius:8px; white-space:pre-wrap; word-break:break-word; line-height:1.35; font-size:12px; }
+  .user { background:#243044; align-self:flex-end; max-width:92%; }
+  .bot { background:var(--card); border:1px solid var(--line); align-self:flex-start; max-width:92%; }
+  .tool { color:var(--muted); font-size:9px; font-family:ui-monospace,monospace; align-self:center; padding:3px 6px; }
+  footer { position:fixed; left:0; right:0; bottom:0; z-index:30; padding:5px 8px calc(5px + env(safe-area-inset-bottom)); background:linear-gradient(transparent, var(--bg) 18%); border-top:1px solid var(--line); }
+  .composer-bar { display:flex; gap:5px; max-width:900px; margin:0 auto 4px; align-items:center; flex-wrap:wrap; }
+  #mode, #model, #speed { width:auto; min-width:96px; flex:1 1 96px; max-width:180px; font-size:11px; padding:5px 7px; }
+  #composer { display:flex; gap:5px; max-width:900px; margin:0 auto; align-items:flex-end; }
+  #prompt { min-height:32px; max-height:90px; resize:none; font-size:12px; line-height:1.3; }
+  details.settings { padding:5px 8px; border-bottom:1px solid var(--line); font-size:11px; flex-shrink:0; max-height:40vh; overflow:auto; }
+  details.settings summary { font-size:11px; }
+  .hint { color:var(--muted); font-size:9px; margin:3px 0 5px; }
+  @media (max-width:767px) {
+    #sessionBackdrop {
+      display:none; position:fixed; inset:0; background:rgba(0,0,0,.52); z-index:40;
+    }
+    body.sessions-open #sessionBackdrop { display:block; }
+    #sessionsToggle { display:inline-flex; align-items:center; flex-shrink:0; padding:6px 8px; font-size:11px; }
+    #closeSessions { display:inline-flex; }
+    .sheet-handle {
+      display:block; width:36px; height:4px; border-radius:99px; background:#3a4150; margin:8px auto 0;
+    }
+    #sidebar {
+      --sheet-h: min(85dvh, 640px);
+      position:fixed; left:0; right:0; z-index:50;
+      height:var(--sheet-h); max-height:var(--sheet-h); width:auto;
+      bottom: calc(-1 * var(--sheet-h) - 24px);
+      border:0; border-top:1px solid var(--line);
+      border-radius:14px 14px 0 0;
+      transform:none;
+      transition:bottom .22s ease; pointer-events:none; box-shadow:0 -12px 40px rgba(0,0,0,.35);
+      overflow:hidden;
+    }
+    body.sessions-open #sidebar { bottom:0; pointer-events:auto; }
+  }
+</style>
+</head>
+<body>
+<div id="sessionBackdrop"></div>
+<header>
+  <h1>远端 Cursor CLI</h1>
+  <div class="sub">改的是这台机器上的文件。和 IDE 侧边栏不是同一条聊天。</div>
+  <div id="status" class="status">检查中…</div>
+</header>
+<div id="taskStatus" class="idle">
+  <span class="dot"></span>
+  <span class="label">空闲</span>
+  <span class="detail">暂无运行中的任务</span>
+</div>
+<main>
+  <details class="settings">
+    <summary>设置</summary>
+    <div style="padding:8px 0">
+      <p class="sub">API key 在 Cursor Dashboard → API Keys 生成。粘贴后点「保存」。</p>
+      <input id="apiKey" type="password" placeholder="粘贴 CURSOR_API_KEY" autocomplete="off"/>
+      <div class="row">
+        <input id="workspace" placeholder="workspace 路径"/>
+      </div>
+      <div class="row">
+        <button class="ghost" id="save">保存 API key / workspace</button>
+        <button class="ghost" type="button" id="logout">退出登录</button>
+      </div>
+      <div class="sub" id="saveHint"></div>
+    </div>
+  </details>
+  <div class="layout">
+    <aside id="sidebar">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sidebar-head">
+        <span id="sessionCount">会话</span>
+        <span style="display:flex;gap:6px">
+          <button class="ghost" type="button" id="newChat">+ 新会话</button>
+          <button class="ghost" type="button" id="closeSessions">关闭</button>
+        </span>
+      </div>
+      <div id="sessionList"></div>
+    </aside>
+    <section class="chat-pane">
+      <div id="chatHead">请选一个会话，或新建</div>
+      <div id="loadMore" hidden><button class="ghost" type="button" id="loadMoreBtn">加载更早消息</button></div>
+      <div id="log"><div class="empty">点「会话」选一条，或新建</div></div>
+      <div class="hint">Enter 发送 · Shift+Enter 换行</div>
+    </section>
+  </div>
+</main>
+<footer>
+  <div class="composer-bar">
+    <select id="mode" title="切换模式后立即生效">
+      <option value="agent">agent（可改文件）</option>
+      <option value="ask">ask（只读）</option>
+      <option value="plan">plan（只读规划）</option>
+    </select>
+    <select id="model" title="模型"></select>
+    <select id="speed" title="速度：快速会尽量选同模型的 -fast 版本">
+      <option value="default">标准</option>
+      <option value="fast">快速</option>
+    </select>
+    <span id="modeHint" class="hint" style="margin:0;flex:1 1 100%"></span>
+  </div>
+  <form id="composer">
+    <button type="button" class="ghost" id="sessionsToggle" title="会话列表">会话</button>
+    <textarea id="prompt" rows="2" placeholder="发给这台机器上的 agent"></textarea>
+    <button type="submit" id="sendBtn" aria-label="发送" title="发送">
+      <span class="send-label">发送</span>
+      <span class="stop-icon" aria-hidden="true"></span>
+    </button>
+  </form>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => _fetch(url, Object.assign({credentials: "same-origin"}, opts)).then(r => {
+  if (r.status === 401 && !String(url).includes("/api/login")) location.href = "/login";
+  return r;
+});
+
+let currentChatId = null;
+let historyLimit = 40;
+
+function headers(extra = {}) {
+  return Object.assign({"Content-Type":"application/json"}, extra);
+}
+
+const MODE_LABELS = {agent: "agent（可改文件）", ask: "ask（只读）", plan: "plan（只读规划）"};
+const JOB_LABELS = {idle:"空闲", running:"运行中", success:"已完成", error:"失败", stopped:"已终止"};
+
+let statusPollTimer = null;
+let localJobRunning = false;
+let chatAbort = null;
+
+function openSessions() { document.body.classList.add("sessions-open"); }
+function closeSessionsDrawer() { document.body.classList.remove("sessions-open"); }
+
+function setSendMode(running) {
+  const btn = $("sendBtn");
+  if (!btn) return;
+  btn.classList.toggle("stop", !!running);
+  btn.setAttribute("aria-label", running ? "终止" : "发送");
+  btn.title = running ? "终止当前任务" : "发送";
+}
+
+async function stopJob() {
+  try {
+    await fetch("/api/stop", {method:"POST", headers: headers(), body: "{}"});
+  } catch {}
+  if (chatAbort) {
+    chatAbort.abort();
+    chatAbort = null;
+  }
+}
+
+function fmtElapsed(s) {
+  if (s == null) return "";
+  if (s < 60) return s.toFixed(0) + "s";
+  return Math.floor(s / 60) + "m " + Math.round(s % 60) + "s";
+}
+
+function renderTaskStatus(job) {
+  const el = $("taskStatus");
+  if (!job) job = {state:"idle"};
+  const state = job.state || "idle";
+  el.className = state;
+  el.querySelector(".label").textContent = JOB_LABELS[state] || state;
+  setSendMode(state === "running");
+  let detail = "";
+  if (state === "running") {
+    detail = fmtElapsed(job.elapsed_s) || "0s";
+    if (job.last_tool) detail += " · " + job.last_tool;
+    else if (job.last_event) detail += " · " + job.last_event;
+    if (job.prompt) detail += " · " + job.prompt;
+  } else if (state === "success") {
+    detail = (job.elapsed_s != null ? "用时 " + fmtElapsed(job.elapsed_s) : "") + (job.prompt ? " · " + job.prompt : "");
+  } else if (state === "error") {
+    detail = (job.error || "任务失败") + (job.elapsed_s != null ? " · " + fmtElapsed(job.elapsed_s) : "");
+  } else if (state === "stopped") {
+    detail = "已手动终止" + (job.elapsed_s != null ? " · " + fmtElapsed(job.elapsed_s) : "");
+  } else {
+    detail = "暂无运行中的任务";
+  }
+  el.querySelector(".detail").textContent = detail.trim() || "—";
+}
+
+function scheduleStatusPoll(active) {
+  if (statusPollTimer) { clearInterval(statusPollTimer); statusPollTimer = null; }
+  const ms = active ? 1500 : 5000;
+  statusPollTimer = setInterval(async () => {
+    const r = await fetch("/api/status", {headers: headers()}).catch(() => null);
+    if (!r?.ok) return;
+    const s = await r.json();
+    renderTaskStatus(s.job);
+    if (s.job?.state !== "running") localJobRunning = false;
+    if (s.job?.state !== "running" && !localJobRunning) scheduleStatusPoll(false);
+  }, ms);
+}
+
+function fmtTime(ms) {
+  if (!ms) return "";
+  return new Date(ms).toLocaleString(undefined, { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
+}
+
+function updateModeHint(mode, model, speed, resolvedModel) {
+  const bits = [MODE_LABELS[mode] || mode];
+  if (model) bits.push(model);
+  if (speed === "fast") bits.push("快速");
+  if (resolvedModel && resolvedModel !== model) bits.push("→ " + resolvedModel);
+  $("modeHint").textContent = "当前：" + bits.join(" · ");
+}
+
+function renderModelOptions(models, selected) {
+  const sel = $("model");
+  const ids = new Set((models || []).map(m => m.id));
+  sel.innerHTML = "";
+  const append = (parent, id, label) => {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = label || id;
+    parent.appendChild(opt);
+  };
+  const popular = POPULAR_MODELS.filter(id => ids.has(id));
+  if (popular.length) {
+    const group = document.createElement("optgroup");
+    group.label = "常用";
+    for (const id of popular) {
+      const item = models.find(m => m.id === id);
+      append(group, id, item?.label || id);
+    }
+    sel.appendChild(group);
+  }
+  const groupAll = document.createElement("optgroup");
+  groupAll.label = "全部";
+  for (const item of models || []) {
+    if (popular.includes(item.id)) continue;
+    append(groupAll, item.id, item.label || item.id);
+  }
+  sel.appendChild(groupAll);
+  if (selected && ids.has(selected)) sel.value = selected;
+  else if (ids.has(DEFAULT_MODEL)) sel.value = DEFAULT_MODEL;
+}
+
+const POPULAR_MODELS = ["auto","composer-2.5","composer-2.5-fast","gpt-5.3-codex","gpt-5.3-codex-fast","claude-opus-5-thinking-high","claude-sonnet-5-thinking-high","cursor-grok-4.6-high","cursor-grok-4.6-high-fast"];
+const DEFAULT_MODEL = "composer-2.5";
+
+async function loadModels(selected) {
+  const r = await fetch("/api/models", {headers: headers()});
+  if (!r.ok) return;
+  const data = await r.json();
+  renderModelOptions(data.models || [], selected || data.model || DEFAULT_MODEL);
+}
+
+function addMsg(cls, text) {
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  el.textContent = text;
+  $("log").appendChild(el);
+  el.scrollIntoView({behavior:"smooth", block:"end"});
+  return el;
+}
+
+function renderLog(messages) {
+  $("log").innerHTML = "";
+  if (!messages || !messages.length) {
+    $("log").innerHTML = '<div class="empty">这条会话还没有消息</div>';
+    return;
+  }
+  for (const m of messages) addMsg(m.role === "user" ? "user" : "bot", m.text);
+}
+
+function updateChatHead(preview, chatId) {
+  if (!chatId) {
+    $("chatHead").textContent = "请选一个会话，或新建";
+    return;
+  }
+  $("chatHead").innerHTML = "当前：<strong>" + (preview || chatId.slice(0,8)) + "</strong> · " + chatId.slice(0,8);
+}
+
+function renderSessionList(sessions, activeId) {
+  const box = $("sessionList");
+  box.innerHTML = "";
+  $("sessionCount").textContent = "会话 (" + (sessions?.length || 0) + ")";
+  if (!sessions?.length) {
+    box.innerHTML = '<div class="empty" style="padding:16px">暂无历史</div>';
+    return;
+  }
+  for (const s of sessions) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "session-item" + (s.id === activeId ? " active" : "");
+    btn.innerHTML = '<div class="title">' + (s.preview || "空会话") + '</div><div class="meta">' + fmtTime(s.updated_at) + " · " + s.id.slice(0,8) + '</div>';
+    btn.onclick = () => switchSession(s.id, s.preview);
+    box.appendChild(btn);
+  }
+}
+
+async function loadSessions(activeId) {
+  const r = await fetch("/api/sessions", {headers: headers()});
+  if (!r.ok) return [];
+  const data = await r.json();
+  renderSessionList(data.sessions || [], activeId);
+  return data.sessions || [];
+}
+
+async function loadHistory(chatId, limit = historyLimit) {
+  if (!chatId) { renderLog([]); $("loadMore").hidden = true; return; }
+  const r = await fetch("/api/history?chat_id=" + encodeURIComponent(chatId) + "&limit=" + limit, {headers: headers()});
+  if (!r.ok) return;
+  const data = await r.json();
+  renderLog(data.messages || []);
+  $("loadMore").hidden = !data.truncated;
+  if (data.truncated) {
+    $("loadMoreBtn").textContent = "加载更早消息（已显示 " + data.messages.length + " / " + data.total + "）";
+  }
+}
+
+async function switchSession(chatId, preview) {
+  const r = await fetch("/api/switch-chat", {method:"POST", headers: headers(), body: JSON.stringify({chat_id: chatId})});
+  const data = await r.json();
+  if (!r.ok) { alert(data.error || "切换失败"); return; }
+  currentChatId = chatId;
+  historyLimit = 40;
+  updateChatHead(preview, chatId);
+  renderLog(data.messages || []);
+  $("loadMore").hidden = !data.truncated;
+  if (data.truncated) {
+    $("loadMoreBtn").textContent = "加载更早消息（已显示 " + data.messages.length + " / " + data.total + "）";
+  }
+  await loadSessions(chatId);
+  closeSessionsDrawer();
+}
+
+async function refreshStatus() {
+  const r = await fetch("/api/status", {headers: headers()});
+  const s = await r.json();
+  const el = $("status");
+  if (!r.ok) { el.className = "status bad"; el.textContent = "鉴权失败"; return null; }
+  el.className = "status " + (s.has_key ? "ok" : "bad");
+  const mode = s.mode || "agent";
+  const model = s.model || DEFAULT_MODEL;
+  const speed = s.speed || "default";
+  el.textContent = s.has_key
+    ? ("已配置 API key · " + mode + " · " + model + (speed === "fast" ? " · 快速" : "") + " · " + (s.chat_id ? s.chat_id.slice(0,8) : "未选会话"))
+    : "还没填 API key";
+  renderTaskStatus(s.job);
+  if (s.job?.state === "running") {
+    localJobRunning = true;
+    scheduleStatusPoll(true);
+  } else if (!localJobRunning) {
+    scheduleStatusPoll(false);
+  }
+  $("workspace").value = s.workspace || "";
+  $("mode").value = mode;
+  $("speed").value = speed;
+  await loadModels(model);
+  updateModeHint(mode, model, speed, s.resolved_model);
+  currentChatId = s.chat_id || currentChatId;
+  const sessions = await loadSessions(s.chat_id);
+  if (s.chat_id) {
+    const cur = (sessions || []).find(x => x.id === s.chat_id);
+    updateChatHead(cur?.preview, s.chat_id);
+  }
+  return s;
+}
+
+async function saveSettings({requireKey=false, modeOnly=false} = {}) {
+  const body = {workspace: $("workspace").value, mode: $("mode").value};
+  const key = $("apiKey").value.trim();
+  if (key) body.api_key = key;
+  else if (requireKey) { $("saveHint").textContent = "请先粘贴 API key"; return false; }
+  const r = await fetch("/api/settings", {method:"POST", headers: headers(), body: JSON.stringify(body)});
+  const s = await r.json();
+  if (!r.ok) { $("saveHint").textContent = s.error || "保存失败"; return false; }
+  if (key) $("apiKey").value = "";
+  if (modeOnly) {
+    updateModeHint(s.mode || $("mode").value, $("model").value, $("speed").value, s.resolved_model);
+    $("saveHint").textContent = "";
+    return true;
+  }
+  $("saveHint").textContent = s.has_key ? "已保存" : "workspace 已保存";
+  await refreshStatus();
+  return !!s.has_key;
+}
+
+async function saveComposerSettings(fields = {}) {
+  const body = Object.assign({
+    mode: $("mode").value,
+    model: $("model").value,
+    speed: $("speed").value,
+  }, fields);
+  const r = await fetch("/api/settings", {method:"POST", headers: headers(), body: JSON.stringify(body)});
+  const s = await r.json();
+  if (!r.ok) { $("modeHint").textContent = s.error || "保存失败"; return false; }
+  updateModeHint(s.mode || body.mode, s.model || body.model, s.speed || body.speed, s.resolved_model);
+  const el = $("status");
+  if (el.classList.contains("ok")) {
+    const chat = currentChatId ? currentChatId.slice(0, 8) : "未选会话";
+    const speedLabel = (s.speed || body.speed) === "fast" ? " · 快速" : "";
+    el.textContent = "已配置 API key · " + (s.mode || body.mode) + " · " + (s.model || body.model) + speedLabel + " · " + chat;
+  }
+  return true;
+}
+
+async function saveMode() {
+  await saveComposerSettings();
+}
+
+async function saveModelSpeed() {
+  await saveComposerSettings();
+}
+
+$("save").onclick = () => saveSettings({requireKey: true});
+$("mode").onchange = saveMode;
+$("model").onchange = saveModelSpeed;
+$("speed").onchange = saveModelSpeed;
+$("logout").onclick = async () => {
+  await fetch("/api/logout", {method:"POST", headers: headers()});
+  location.href = "/login";
+};
+
+async function createNewChat() {
+  const r = await fetch("/api/new-chat", {method:"POST", headers: headers()});
+  const s = await r.json();
+  if (!r.ok) { alert(s.error || "失败"); return null; }
+  currentChatId = s.chat_id;
+  historyLimit = 40;
+  updateChatHead("新会话", s.chat_id);
+  renderLog([]);
+  $("loadMore").hidden = true;
+  await loadSessions(s.chat_id);
+  await refreshStatus();
+  closeSessionsDrawer();
+  return s.chat_id;
+}
+
+$("newChat").onclick = createNewChat;
+$("sessionsToggle").onclick = openSessions;
+$("closeSessions").onclick = closeSessionsDrawer;
+$("sessionBackdrop").onclick = closeSessionsDrawer;
+(function pinSessionListScroll() {
+  const el = $("sessionList");
+  if (!el) return;
+  let startY = 0;
+  el.addEventListener("touchstart", (e) => { startY = e.touches[0].clientY; }, {passive:true});
+  el.addEventListener("touchmove", (e) => {
+    const goingDown = e.touches[0].clientY > startY;
+    if (goingDown && el.scrollTop <= 0) e.preventDefault();
+  }, {passive:false});
+})();
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeSessionsDrawer();
+});
+
+$("loadMoreBtn").onclick = async () => {
+  if (!currentChatId) return;
+  historyLimit = Math.min(historyLimit + 40, 9999);
+  await loadHistory(currentChatId, historyLimit);
+};
+
+$("prompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (localJobRunning) return;
+    $("composer").requestSubmit();
+  }
+});
+
+$("sendBtn").addEventListener("click", (e) => {
+  if (localJobRunning) {
+    e.preventDefault();
+    stopJob();
+  }
+});
+
+$("composer").onsubmit = async (e) => {
+  e.preventDefault();
+  if (localJobRunning) return;
+  const text = $("prompt").value.trim();
+  if (!text) return;
+  if ($("apiKey").value.trim()) {
+    const ok = await saveSettings();
+    if (!ok) { alert("请先保存 API key"); return; }
+  }
+  let st = await fetch("/api/status", {headers: headers()}).then(r => r.json()).catch(() => ({}));
+  if (!st.has_key) { alert("还没配置 API key"); return; }
+  if (!st.chat_id) {
+    await createNewChat();
+    st = await fetch("/api/status", {headers: headers()}).then(r => r.json());
+    if (!st.chat_id) return;
+  }
+  $("prompt").value = "";
+  addMsg("user", text);
+  const bot = addMsg("bot", "正在启动 agent…");
+  localJobRunning = true;
+  renderTaskStatus({state:"running", elapsed_s:0, last_event:"连接中", prompt:text.slice(0,80)});
+  scheduleStatusPoll(true);
+  chatAbort = new AbortController();
+  let res;
+  try {
+    res = await fetch("/api/chat", {
+      method:"POST",
+      headers: headers(),
+      body: JSON.stringify({text, mode: $("mode").value, model: $("model").value, speed: $("speed").value}),
+      signal: chatAbort.signal,
+    });
+  } catch (err) {
+    localJobRunning = false;
+    if (err && err.name === "AbortError") {
+      if (bot.textContent.startsWith("正在启动")) bot.textContent = "已终止";
+      renderTaskStatus({state:"stopped"});
+      scheduleStatusPoll(false);
+      return;
+    }
+    bot.textContent = String(err);
+    renderTaskStatus({state:"error", error: String(err)});
+    scheduleStatusPoll(false);
+    return;
+  }
+  if (!res.ok) {
+    localJobRunning = false;
+    let msg = await res.text();
+    try { const j = JSON.parse(msg); msg = j.error || j.hint || msg; } catch {}
+    bot.textContent = msg;
+    renderTaskStatus({state:"error", error: msg});
+    scheduleStatusPoll(false);
+    return;
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  try {
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const parts = buf.split("\n\n");
+      buf = parts.pop() || "";
+      for (const p of parts) {
+        const line = p.split("\n").filter(x => x.startsWith("data:")).map(x => x.slice(5).trim()).join("");
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.type === "job") {
+          renderTaskStatus(ev);
+          if (ev.state === "stopped" && bot.textContent.startsWith("正在启动")) bot.textContent = "已终止";
+        } else if (ev.type === "text") {
+          if (bot.textContent.startsWith("正在启动")) bot.textContent = "";
+          bot.textContent += ev.text;
+        } else if (ev.type === "tool") addMsg("tool", ev.text);
+        else if (ev.type === "error") bot.textContent += "\n" + ev.text;
+        else if (ev.type === "done") { localJobRunning = false; refreshStatus(); }
+      }
+    }
+  } catch (err) {
+    if (!(err && err.name === "AbortError")) {
+      bot.textContent += "\n" + String(err);
+    } else if (bot.textContent.startsWith("正在启动")) {
+      bot.textContent = "已终止";
+    }
+  }
+  localJobRunning = false;
+  chatAbort = null;
+  scheduleStatusPoll(false);
+};
+
+(async () => {
+  const s = await refreshStatus();
+  if (s?.chat_id) {
+    currentChatId = s.chat_id;
+    await loadHistory(s.chat_id, historyLimit);
+  }
+})();
+</script>
+</body>
+</html>

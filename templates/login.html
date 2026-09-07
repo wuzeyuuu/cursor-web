@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>登录 · Cursor CLI</title>
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --card:#1a1d24; --line:#2a2f3a; --txt:#e8eaed; --muted:#9aa3b2; --acc:#7aa2f7; --bad:#f7768e; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; font-family:ui-sans-serif,system-ui,sans-serif; background:var(--bg); color:var(--txt); padding:16px; }
+  .card { width:min(360px,100%); background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+  h1 { margin:0 0 6px; font-size:18px; }
+  p { margin:0 0 14px; color:var(--muted); font-size:12px; line-height:1.45; }
+  input { width:100%; background:#12151b; color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font-size:14px; margin-bottom:12px; }
+  button { width:100%; background:var(--acc); color:#0b1020; border:0; border-radius:8px; padding:10px; font-size:14px; font-weight:600; cursor:pointer; }
+  .err { color:var(--bad); font-size:12px; min-height:18px; margin-bottom:8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Cursor CLI</h1>
+  <p>请输入访问密码。当前为 HTTP 明文传输，请勿在公共 WiFi 使用。</p>
+  <div id="err" class="err"></div>
+  <form id="loginForm">
+    <input id="password" type="password" placeholder="访问密码" autocomplete="current-password" required/>
+    <button type="submit">登录</button>
+  </form>
+</div>
+<script>
+document.getElementById("loginForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const err = document.getElementById("err");
+  err.textContent = "";
+  const password = document.getElementById("password").value;
+  const r = await fetch("/api/login", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({password}),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { err.textContent = data.error || "登录失败"; return; }
+  location.href = "/";
+};
+</script>
+</body>
+</html>

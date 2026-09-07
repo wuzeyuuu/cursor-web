@@ -1,0 +1,24 @@
+# Local runtime files — never commit
+secrets.json
+state.json
+.env
+.env.local
+.env.*.local
+.cloudflared/
+*.pem
+cloudflared-credentials.json
+
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
