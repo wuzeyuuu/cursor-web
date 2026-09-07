@@ -1,17 +1,34 @@
 # Cursor Web
 
-Browser UI for the **Cursor Agent CLI** running on this machine. Send prompts from a phone or another computer on the same network; the agent still edits files locally.
+[English](README.md) | [中文](README.zh.md)
+
+**Core purpose: write code from your phone, anywhere.**  
+The agent runs on the computer at home and edits files on that machine. You can be on the subway, in bed, or outside — open a browser and keep giving it orders.
 
 This is a stdlib-only Python app (no pip packages). Python 3.10+.
 
+## Why this exists (a rant about Cursor)
+
+Cursor sells “AI that writes code” hard, then welds the agent that can actually edit your repo to the desktop IDE. Walk away from that editor window and the capability drops to zero.
+
+Worse: same product, same bill, two conversation stores that do not talk to each other:
+
+- IDE sidebar: `agent-transcripts` / composer
+- Agent CLI: `~/.cursor/chats`
+
+Cursor staff have confirmed you **cannot** `--resume` across them. Context you built at the desk is gone the moment you leave. Cloud / mobile sync is a cloud agent, not the local CLI on *this* machine. There is no official way to keep “edit the files on my disk” going from a phone.
+
+So this project is small on purpose: wrap the **local Cursor Agent CLI** in a phone-usable web UI. It is not a new IDE. It is the agent you already pay for, unshackled from sitting in front of a monitor.
+
+The web chat is **not** the Cursor IDE sidebar. It is a CLI session against the workspace you set. That split is Cursor’s, not a bug in this repo.
+
 ## What it does
 
-- Password-protected web UI (cookie session)
+- Password-protected web UI (cookie session), usable on a phone
 - Streams `agent -p --output-format stream-json` over SSE
-- Resumes Cursor chats (`~/.cursor/chats`)
+- Resumes **CLI** chats (`~/.cursor/chats`) — not IDE chats
 - Modes: agent / ask / plan; model + fast variant
-
-The web chat is **not** the Cursor IDE sidebar. It is a separate CLI session against the workspace you set.
+- Bottom session drawer + stop button while a job is running (mobile-first)
 
 ## Layout
 
@@ -103,8 +120,6 @@ If you copied `secrets.json` from another machine, the old password hash still w
 - The API key in a copied `secrets.json` should be treated as exposed if that file ever left your machine. Rotate it in the Cursor dashboard if you are unsure.
 
 ## GitHub publish checklist
-
-This directory is meant to be split into its own repo later.
 
 1. Copy `.env.example` → `.env` locally. Do not copy real secrets into the example files.
 2. Confirm `.gitignore` ignores `secrets.json`, `state.json`, `.env`.
