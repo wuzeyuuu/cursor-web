@@ -22,11 +22,14 @@ So this project is small on purpose: wrap the **local Cursor Agent CLI** in a ph
 
 The web chat is **not** the Cursor IDE sidebar. It is a CLI session against the workspace you set. That split is Cursor’s, not a bug in this repo.
 
+The session list also **read-only** shows IDE transcripts for the same workspace (`~/.cursor/projects/.../agent-transcripts`) so you can reread desk-side chats on a phone. You still cannot `--resume` an IDE id. Sending from an IDE thread starts a new CLI chat.
+
 ## What it does
 
 - Password-protected web UI (cookie session), usable on a phone
 - Streams `agent -p --output-format stream-json` over SSE
-- Resumes **CLI** chats (`~/.cursor/chats`) — not IDE chats
+- Resumes **CLI** chats (`~/.cursor/chats`)
+- Read-only listing of matching **IDE** chats; sending starts a new CLI chat
 - Modes: agent / ask / plan; model + fast variant
 - Bottom session drawer + stop button while a job is running (mobile-first)
 
@@ -39,7 +42,7 @@ app/
   store.py             state.json / secrets.json
   auth.py              password + sessions
   jobs.py              in-flight task status
-  chats.py             transcript history from Cursor sqlite
+  chats.py             CLI sqlite + IDE jsonl transcripts
   agent_cli.py         spawn / stream / models
   http_handler.py      HTTP routes
   main.py
@@ -100,15 +103,18 @@ Open `http://127.0.0.1:8786/login`.
 
 ## Cloudflare Tunnel (public HTTPS URL)
 
-This app must stay on **this machine** (it shells out to local `agent`). Do not deploy it as a Worker. Map the local port with Cloudflare Tunnel instead.
+This app must stay on **this machine** (it shells out to local `agent`). Do not deploy it as a Worker. The Windows service `cloudflared` already runs named tunnel **cursor** (`27a9add3-53d2-45bf-8cfd-b2ba1a3b6853`). Do not run Quick Tunnels (`trycloudflare.com`); those URLs change and do not support SSE.
 
-1. Leave `start.bat` / `python server.py` running on port 8786.
-2. Run `tunnel.bat` (installs are already done via `cloudflared`).
-3. Copy the printed `https://….trycloudflare.com` URL and open `/login` on it.
+Add a public hostname once (Zero Trust → Networks → Tunnels → **cursor** → Public Hostname):
 
-Quick tunnels (`trycloudflare.com`) are for testing: the URL changes every run, and Cloudflare documents that they **do not support SSE**. Login and the UI should work; live chat streaming may stall until you create a **named tunnel** on your own domain (Zero Trust → Networks → Tunnels, then `cloudflared tunnel run --token …`).
+- Subdomain: `cursor`
+- Domain: `klinedance.kdns.fr` (also active: `klinedance.dpdns.org`)
+- Type: HTTP
+- URL: `127.0.0.1:8786`
 
-This exposes an agent that can edit files. Keep the web password, prefer Cloudflare Access on a named hostname, and do not share the URL.
+Then keep `start.bat` running and open `https://cursor.klinedance.kdns.fr/login`. `tunnel.bat` only prints this status; it does not start another tunnel.
+
+This exposes an agent that can edit files. Keep the web password, prefer Cloudflare Access on the hostname, and do not share the URL.
 
 If you copied `secrets.json` from another machine, the old password hash still works until you set `AGENT_WEB_PASSWORD` (that overwrites the hash). Foreign Linux workspace paths are remapped to this machine on startup; the old `chat_id` is cleared.
 
@@ -137,8 +143,9 @@ If you copied `secrets.json` from another machine, the old password hash still w
 | `AGENT_WEB_PORT` | Port (default 8786) |
 | `AGENT_WEB_PASSWORD` | Sets/replaces the login password hash |
 | `CURSOR_API_KEY` | Agent auth (or paste in UI) |
-| `AGENT_MODEL` | Default model id |
-| `CURSOR_CHATS_ROOT` | Override chat transcript root |
+| `HTTPS_PROXY` / `AGENT_HTTPS_PROXY` | HTTP proxy for Agent CLI (auto-detects Clash/system proxy if unset) |
+| `CURSOR_CHATS_ROOT` | Override CLI chat sqlite root |
+| `CURSOR_PROJECTS_ROOT` | Override IDE `~/.cursor/projects` root |
 | `AGENT_WEB_SESSION_DAYS` | Cookie lifetime (default 7) |
 
 ## License

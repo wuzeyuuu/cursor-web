@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import threading
 import time
+from urllib.parse import urlparse
 
 from .config import (
     AGENT_BIN,
@@ -20,6 +22,8 @@ from .store import load_secrets, save_state
 
 _models_lock = threading.Lock()
 _models_cache: dict = {"ts": 0.0, "items": []}
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_LOCAL_PROXY_PORTS = (7897, 7890, 10809, 20171, 10808, 1080)
 
 
 def agent_argv(args: list[str]) -> list[str]:
@@ -40,6 +44,91 @@ def _subprocess_kwargs() -> dict:
     return kwargs
 
 
+def _tcp_open(host: str, port: int, timeout: float = 0.3) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _normalize_proxy(raw: str) -> str | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if "=" in raw:
+        picked = ""
+        for item in raw.split(";"):
+            if "=" not in item:
+                continue
+            kind, _, value = item.partition("=")
+            kind = kind.strip().lower()
+            value = value.strip()
+            if kind in ("https", "http") and value:
+                picked = value
+                break
+            if kind.startswith("socks") and value and not picked:
+                picked = value if value.lower().startswith("socks") else f"socks5://{value}"
+        raw = picked
+    if not raw:
+        return None
+    if raw.lower().startswith(("http://", "https://", "socks5://", "socks://")):
+        return raw
+    return f"http://{raw}"
+
+
+def _windows_system_proxy() -> str | None:
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ) as key:
+            enable, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            if not enable:
+                return None
+            server, _ = winreg.QueryValueEx(key, "ProxyServer")
+    except OSError:
+        return None
+    return _normalize_proxy(str(server))
+
+
+def _proxy_reachable(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return _tcp_open(host, port)
+
+
+def resolve_https_proxy() -> str | None:
+    for name in (
+        "AGENT_HTTPS_PROXY",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ):
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            proxy = _normalize_proxy(raw)
+            if proxy:
+                return proxy
+    system = _windows_system_proxy()
+    if system and _proxy_reachable(system):
+        return system
+    for port in _LOCAL_PROXY_PORTS:
+        if _tcp_open("127.0.0.1", port):
+            return f"http://127.0.0.1:{port}"
+    return None
+
+
 def agent_env() -> dict:
     env = os.environ.copy()
     key = load_secrets().get("cursor_api_key") or os.environ.get("CURSOR_API_KEY", "")
@@ -47,6 +136,16 @@ def agent_env() -> dict:
         env["CURSOR_API_KEY"] = key
     env["NO_OPEN_BROWSER"] = "1"
     env["CI"] = "1"
+    proxy = resolve_https_proxy()
+    if proxy:
+        env["HTTPS_PROXY"] = proxy
+        env["HTTP_PROXY"] = proxy
+        env["https_proxy"] = proxy
+        env["http_proxy"] = proxy
+        env["NODE_USE_ENV_PROXY"] = "1"
+        no_proxy = env.get("NO_PROXY") or env.get("no_proxy") or "localhost,127.0.0.1"
+        env["NO_PROXY"] = no_proxy
+        env["no_proxy"] = no_proxy
     return env
 
 
@@ -174,7 +273,7 @@ def build_agent_args(state: dict, chat_id: str, text: str) -> list[str]:
 
 
 def parse_stream_line(line: str) -> list[dict]:
-    line = line.strip()
+    line = _ANSI_RE.sub("", line).strip()
     if not line:
         return []
     if line.startswith(("RetriableError:", "Error:", "error:")):
@@ -210,9 +309,9 @@ def parse_stream_line(line: str) -> list[dict]:
     return events
 
 
-def run_agent_stream(args: list[str], emit) -> tuple[bool, bool]:
+def run_agent_stream(args: list[str], emit, chat_id: str | None = None) -> tuple[bool, bool]:
     """Run agent once. Returns (success, retriable)."""
-    if is_stop_requested():
+    if is_stop_requested(chat_id):
         return False, False
     proc = subprocess.Popen(
         agent_argv(args),
@@ -222,14 +321,14 @@ def run_agent_stream(args: list[str], emit) -> tuple[bool, bool]:
         bufsize=1,
         **_subprocess_kwargs(),
     )
-    set_job_proc(proc)
+    set_job_proc(chat_id, proc)
     assert proc.stdout is not None
     saw_done = False
     saw_text = False
     retriable = False
     try:
         for line in proc.stdout:
-            if is_stop_requested():
+            if is_stop_requested(chat_id):
                 break
             for ev in parse_stream_line(line):
                 if ev.get("type") == "done":
@@ -241,11 +340,11 @@ def run_agent_stream(args: list[str], emit) -> tuple[bool, bool]:
                 if ev.get("retriable"):
                     retriable = True
                 emit(ev)
-        if is_stop_requested():
+        if is_stop_requested(chat_id):
             return False, False
         proc.wait(timeout=15)
     except Exception as exc:
-        if is_stop_requested():
+        if is_stop_requested(chat_id):
             return False, False
         emit({"type": "error", "text": str(exc)})
         try:
@@ -254,7 +353,7 @@ def run_agent_stream(args: list[str], emit) -> tuple[bool, bool]:
             pass
         return False, False
     finally:
-        set_job_proc(None)
+        set_job_proc(chat_id, None)
     success = proc.returncode == 0 and saw_done and saw_text
     if proc.returncode != 0 and not saw_done:
         if not retriable:
@@ -264,25 +363,27 @@ def run_agent_stream(args: list[str], emit) -> tuple[bool, bool]:
     return success, retriable
 
 
-def stream_chat_with_retries(args: list[str], emit_all, emit_job) -> bool:
+def stream_chat_with_retries(
+    args: list[str], emit_all, emit_job, chat_id: str | None = None
+) -> bool:
     for attempt in range(1, MAX_AGENT_RETRIES + 1):
-        if is_stop_requested():
+        if is_stop_requested(chat_id):
             return False
         if attempt > 1:
-            update_job(last_event=f"重试 {attempt}/{MAX_AGENT_RETRIES}")
+            update_job(chat_id, last_event=f"重试 {attempt}/{MAX_AGENT_RETRIES}")
             emit_all({"type": "tool", "text": f"重试 {attempt}/{MAX_AGENT_RETRIES}…"})
             emit_job()
             for _ in range(int(min(2 * attempt, 8) * 10)):
-                if is_stop_requested():
+                if is_stop_requested(chat_id):
                     return False
                 time.sleep(0.1)
-        success, retriable = run_agent_stream(args, emit_all)
-        if is_stop_requested():
+        success, retriable = run_agent_stream(args, emit_all, chat_id)
+        if is_stop_requested(chat_id):
             return False
         if success:
             return True
         if not retriable or attempt == MAX_AGENT_RETRIES:
-            if attempt == MAX_AGENT_RETRIES and not is_stop_requested():
+            if attempt == MAX_AGENT_RETRIES and not is_stop_requested(chat_id):
                 emit_all(
                     {
                         "type": "error",

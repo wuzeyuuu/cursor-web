@@ -22,10 +22,19 @@ from .auth import (
     record_login_failure,
     record_login_success,
     revoke_session,
+    request_is_https,
     session_cookie_header,
     verify_password,
 )
-from .chats import chat_store_path, list_sessions, load_history
+from .chats import (
+    chat_exists,
+    chat_source,
+    chat_store_path,
+    list_sessions,
+    load_history,
+    parse_known,
+    sessions_etag,
+)
 from .config import (
     AGENT_BIN,
     CHAT_ID_RE,
@@ -34,7 +43,21 @@ from .config import (
     TEMPLATES_DIR,
     agent_install_hint,
 )
-from .jobs import finish_job, get_job_status, is_stop_requested, request_stop, start_job, update_job
+from .jobs import (
+    begin_turn,
+    cancel_turn,
+    edit_turn,
+    end_turn,
+    finish_job,
+    get_job_status,
+    is_stop_requested,
+    list_active_jobs,
+    promote_turn,
+    request_stop,
+    start_job,
+    update_job,
+    wait_turn,
+)
 from .store import load_secrets, load_state, save_secrets, save_state
 
 def _template(name: str) -> str:
@@ -104,29 +127,43 @@ class Handler(BaseHTTPRequestHandler):
             secrets = load_secrets()
             state = load_state()
             has_key = bool(secrets.get("cursor_api_key") or os.environ.get("CURSOR_API_KEY"))
+            chat_id = state.get("chat_id")
             code, body = json_bytes(
                 {
                     "ok": True,
                     "has_key": has_key,
                     "agent": AGENT_BIN.exists(),
                     "workspace": state["workspace"],
-                    "chat_id": state.get("chat_id"),
+                    "chat_id": chat_id,
+                    "chat_source": chat_source(state["workspace"], chat_id or ""),
                     "mode": state.get("mode", "agent"),
                     "model": state.get("model", DEFAULT_MODEL),
                     "speed": state.get("speed", "default"),
                     "resolved_model": resolve_model(
                         state.get("model", DEFAULT_MODEL), state.get("speed", "default")
                     ),
-                    "job": get_job_status(),
+                    "job": get_job_status(chat_id),
+                    "jobs": list_active_jobs(),
                 }
             )
             self._send(code, body, "application/json")
             return
         if path == "/api/sessions":
+            qs = parse_qs(urlparse(self.path).query)
+            known = parse_known((qs.get("known") or [""])[0])
             state = load_state()
-            sessions = list_sessions(state["workspace"])
-            code, body = json_bytes({"ok": True, "sessions": sessions})
-            self._send(code, body, "application/json")
+            sessions = list_sessions(state["workspace"], known=known)
+            etag = sessions_etag(sessions)
+            inm = (self.headers.get("If-None-Match") or "").strip().strip('"')
+            if inm and inm == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            code, body = json_bytes({"ok": True, "sessions": sessions, "etag": etag})
+            self._send(code, body, "application/json", extra_headers=[("ETag", etag)])
             return
         if path == "/api/models":
             state = load_state()
@@ -158,17 +195,26 @@ class Handler(BaseHTTPRequestHandler):
                 limit = int((qs.get("limit") or ["40"])[0])
             except ValueError:
                 limit = 40
-            if limit <= 0:
-                limit = None
-            messages, total = load_history(state["workspace"], chat_id, limit=limit)
+            after_rowid = None
+            before_rowid = None
+            try:
+                if qs.get("after_rowid"):
+                    after_rowid = int(qs["after_rowid"][0])
+                if qs.get("before_rowid"):
+                    before_rowid = int(qs["before_rowid"][0])
+            except ValueError:
+                after_rowid = None
+                before_rowid = None
+            hist = load_history(
+                state["workspace"],
+                chat_id,
+                limit=limit,
+                after_rowid=after_rowid,
+                before_rowid=before_rowid,
+            )
+            source = chat_source(state["workspace"], chat_id)
             code, body = json_bytes(
-                {
-                    "ok": True,
-                    "chat_id": chat_id,
-                    "messages": messages,
-                    "total": total,
-                    "truncated": total > len(messages),
-                }
+                {"ok": True, "chat_id": chat_id, "source": source, **hist}
             )
             self._send(code, body, "application/json")
             return
@@ -201,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 json.dumps({"ok": True}).encode(),
                 "application/json",
-                cookies=[session_cookie_header(token)],
+                cookies=[session_cookie_header(token, secure=request_is_https(self))],
             )
             return
 
@@ -211,7 +257,7 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 json.dumps({"ok": True}).encode(),
                 "application/json",
-                cookies=[clear_session_cookie_header()],
+                cookies=[clear_session_cookie_header(secure=request_is_https(self))],
             )
             return
 
@@ -278,23 +324,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, b'{"error":"invalid chat_id"}', "application/json")
                 return
             state = load_state()
-            store = chat_store_path(state["workspace"], chat_id)
-            if not store.exists():
+            if not chat_exists(state["workspace"], chat_id):
                 self._send(404, b'{"error":"session not found"}', "application/json")
                 return
             state["chat_id"] = chat_id
             save_state(state)
-            messages, total = load_history(state["workspace"], chat_id, limit=40)
+            hist = load_history(state["workspace"], chat_id, limit=40)
+            source = chat_source(state["workspace"], chat_id)
             self._send(
                 200,
                 json.dumps(
-                    {
-                        "ok": True,
-                        "chat_id": chat_id,
-                        "messages": messages,
-                        "total": total,
-                        "truncated": total > len(messages),
-                    }
+                    {"ok": True, "chat_id": chat_id, "source": source, **hist},
+                    ensure_ascii=False,
                 ).encode(),
                 "application/json",
             )
@@ -305,14 +346,71 @@ class Handler(BaseHTTPRequestHandler):
                 payload.get("mode"),
                 payload.get("model"),
                 payload.get("speed"),
+                payload.get("chat_id"),
             )
             return
         if path == "/api/stop":
-            stopped = request_stop()
+            state = load_state()
+            chat_id = (payload.get("chat_id") or state.get("chat_id") or "").strip()
+            stopped = request_stop(chat_id) if chat_id else False
             self._send(
                 200,
                 json.dumps(
-                    {"ok": True, "stopped": stopped, "job": get_job_status()},
+                    {
+                        "ok": True,
+                        "stopped": stopped,
+                        "job": get_job_status(chat_id),
+                        "jobs": list_active_jobs(),
+                    },
+                    ensure_ascii=False,
+                ).encode(),
+                "application/json",
+            )
+            return
+        if path == "/api/queue/cancel":
+            chat_id = (payload.get("chat_id") or "").strip()
+            try:
+                turn_id = int(payload.get("turn_id"))
+            except (TypeError, ValueError):
+                self._send(400, b'{"error":"invalid turn_id"}', "application/json")
+                return
+            ok = cancel_turn(chat_id, turn_id) if chat_id else False
+            self._send(
+                200,
+                json.dumps(
+                    {"ok": ok, "job": get_job_status(chat_id), "jobs": list_active_jobs()},
+                    ensure_ascii=False,
+                ).encode(),
+                "application/json",
+            )
+            return
+        if path == "/api/queue/edit":
+            chat_id = (payload.get("chat_id") or "").strip()
+            text = (payload.get("text") or "").strip()
+            try:
+                turn_id = int(payload.get("turn_id"))
+            except (TypeError, ValueError):
+                self._send(400, b'{"error":"invalid turn_id"}', "application/json")
+                return
+            ok = edit_turn(chat_id, turn_id, text) if chat_id else False
+            self._send(
+                200,
+                json.dumps({"ok": ok, "job": get_job_status(chat_id)}, ensure_ascii=False).encode(),
+                "application/json",
+            )
+            return
+        if path == "/api/queue/bump":
+            chat_id = (payload.get("chat_id") or "").strip()
+            try:
+                turn_id = int(payload.get("turn_id"))
+            except (TypeError, ValueError):
+                self._send(400, b'{"error":"invalid turn_id"}', "application/json")
+                return
+            ok = promote_turn(chat_id, turn_id) if chat_id else False
+            self._send(
+                200,
+                json.dumps(
+                    {"ok": ok, "job": get_job_status(chat_id), "jobs": list_active_jobs()},
                     ensure_ascii=False,
                 ).encode(),
                 "application/json",
@@ -326,6 +424,7 @@ class Handler(BaseHTTPRequestHandler):
         mode: str | None = None,
         model: str | None = None,
         speed: str | None = None,
+        chat_id_hint: str | None = None,
     ) -> None:
         text = text.strip()
         if not text:
@@ -359,20 +458,31 @@ class Handler(BaseHTTPRequestHandler):
             state["model"] = model.strip()
         if speed in ("default", "fast"):
             state["speed"] = speed
+        hint = (chat_id_hint or "").strip()
+        if hint and CHAT_ID_RE.match(hint):
+            state["chat_id"] = hint
         save_state(state)
+        forked_from = None
+        existing = state.get("chat_id")
+        if existing and not chat_store_path(state["workspace"], existing).exists():
+            forked_from = existing
+            state["chat_id"] = None
+            save_state(state)
         try:
             chat_id = ensure_chat_id(state)
         except Exception as exc:
             self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
             return
 
-        args = build_agent_args(state, chat_id, text)
-
-        if not start_job(chat_id, text):
+        turn = begin_turn(chat_id, text)
+        if turn is None:
             self._send(
-                409,
+                429,
                 json.dumps(
-                    {"error": "已有任务运行中", "job": get_job_status()},
+                    {
+                        "error": "该会话排队已满，等当前任务结束再发",
+                        "job": get_job_status(chat_id),
+                    },
                     ensure_ascii=False,
                 ).encode(),
                 "application/json",
@@ -394,36 +504,66 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
         def emit_job() -> None:
-            emit({"type": "job", **get_job_status()})
+            emit({"type": "job", **get_job_status(chat_id), "turn_id": turn.id})
 
         def emit_all(obj: dict) -> None:
             if obj.get("type") == "tool":
-                update_job(last_tool=obj.get("text"), last_event="tool")
+                update_job(chat_id, last_tool=obj.get("text"), last_event="tool")
                 emit(obj)
                 emit_job()
             elif obj.get("type") == "text":
-                update_job(last_event="回复中")
+                update_job(chat_id, last_event="回复中")
                 emit(obj)
             else:
                 emit(obj)
 
+        emit(
+            {
+                "type": "chat",
+                "chat_id": chat_id,
+                "source": "cli",
+                "forked_from": forked_from,
+                "turn_id": turn.id,
+            }
+        )
+        emit(
+            {
+                "type": "turn",
+                "turn_id": turn.id,
+                "chat_id": chat_id,
+                "prompt": text,
+                "state": "queued",
+            }
+        )
         emit_job()
         saw_done = False
         try:
-            saw_done = stream_chat_with_retries(args, emit_all, emit_job)
-            if is_stop_requested():
-                finish_job("stopped")
+            if not wait_turn(chat_id, turn, emit):
+                state_name = "cancelled" if turn.cancelled and not is_stop_requested(chat_id) else "stopped"
+                emit({"type": "job", "state": state_name, "chat_id": chat_id, "turn_id": turn.id})
+                emit({"type": "turn", "turn_id": turn.id, "state": state_name})
+                emit({"type": "done"})
+                return
+            prompt = (turn.prompt or text).strip() or text
+            args = build_agent_args(state, chat_id, prompt)
+            start_job(chat_id, prompt, turn)
+            emit({"type": "turn", "turn_id": turn.id, "state": "running", "prompt": prompt})
+            emit_job()
+            saw_done = stream_chat_with_retries(args, emit_all, emit_job, chat_id)
+            if is_stop_requested(chat_id):
+                finish_job(chat_id, "stopped")
             elif saw_done:
-                finish_job("success")
+                finish_job(chat_id, "success")
             else:
-                finish_job("error", "任务失败或已中断")
+                finish_job(chat_id, "error", "任务失败或已中断")
         except Exception as exc:
-            if is_stop_requested():
-                finish_job("stopped")
+            if is_stop_requested(chat_id):
+                finish_job(chat_id, "stopped")
             else:
-                finish_job("error", str(exc))
+                finish_job(chat_id, "error", str(exc))
                 emit_all({"type": "error", "text": str(exc)})
         finally:
+            end_turn(chat_id, turn)
             emit_job()
             if not saw_done:
                 emit({"type": "done"})

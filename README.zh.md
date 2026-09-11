@@ -22,11 +22,14 @@ Cursor 把「AI 写代码」卖得很大，真正能改你仓库的 Agent 却被
 
 网页聊天 **不是** Cursor IDE 侧边栏。它是对着你设定的 workspace 跑的 CLI 会话。这套分裂是 Cursor 自己的，不是本仓库的 bug。
 
+会话列表会 **只读展示** 同一 workspace 的 IDE 记录（`~/.cursor/projects/.../agent-transcripts`），方便在手机上翻电脑上聊过的内容。官方仍然不能 `--resume` IDE 的 id；在 IDE 会话里点发送，会新开一条 CLI 会话，不会把两边拼回去。
+
 ## 能做什么
 
 - 带密码的网页（cookie 会话），手机能用
 - 用 SSE 流式输出 `agent -p --output-format stream-json`
-- 续上 **CLI** 会话（`~/.cursor/chats`），不是 IDE 会话
+- 续上 **CLI** 会话（`~/.cursor/chats`）
+- 只读展示同一仓库的 **IDE** 会话；发送会开新的 CLI 会话
 - 模式：agent / ask / plan；模型 + 快速档
 - 手机底部拉出会话列表；任务运行中发送键变成终止
 
@@ -39,7 +42,7 @@ app/
   store.py             state.json / secrets.json
   auth.py              密码和会话
   jobs.py              进行中的任务状态
-  chats.py             从 Cursor sqlite 读聊天记录
+  chats.py             读 CLI sqlite + IDE jsonl
   agent_cli.py         拉起 / 流式输出 / 模型列表
   http_handler.py      HTTP 路由
   main.py
@@ -100,13 +103,16 @@ python server.py
 
 ## Cloudflare Tunnel（公网 HTTPS）
 
-这个应用必须留在 **这台机器** 上（它要调本地 `agent`）。不要当成 Worker 去部署。用 Cloudflare Tunnel 把本地端口映射出去。
+这个应用必须留在 **这台机器** 上（它要调本地 `agent`）。不要当成 Worker 去部署。Windows 服务 `cloudflared` 已经在跑 named tunnel **cursor**（`27a9add3-53d2-45bf-8cfd-b2ba1a3b6853`）。不要再开 Quick Tunnel（`trycloudflare.com`），网址会变，而且不支持 SSE。
 
-1. 让 `start.bat` / `python server.py` 在 8786 端口一直跑着。
-2. 再跑 `tunnel.bat`（`cloudflared` 需已安装）。
-3. 复制打印出来的 `https://….trycloudflare.com`，在后面打开 `/login`。
+在 Zero Trust → Networks → Tunnels → **cursor** → Public Hostname 加一条（只需一次）：
 
-Quick tunnel（`trycloudflare.com`）只适合试：每次运行 URL 都会变，而且 Cloudflare 写明 **不支持 SSE**。登录和页面一般可用；聊天流式输出可能会卡住。要稳定，请用自己域名上的 **named tunnel**（Zero Trust → Networks → Tunnels，然后 `cloudflared tunnel run --token …`）。
+- 子域：`cursor`
+- 域名：`klinedance.kdns.fr`（另一个已激活的是 `klinedance.dpdns.org`）
+- 类型：HTTP
+- URL：`127.0.0.1:8786`
+
+然后保持 `start.bat` 运行，打开 `https://cursor.klinedance.kdns.fr/login`。`tunnel.bat` 只打印状态，不会再起一条隧道。
 
 这等于把能改文件的 Agent 暴露到公网。请保留网页密码，named hostname 上优先开 Cloudflare Access，不要把 URL 随便发给人。
 
@@ -137,8 +143,9 @@ Quick tunnel（`trycloudflare.com`）只适合试：每次运行 URL 都会变�
 | `AGENT_WEB_PORT` | 端口（默认 8786） |
 | `AGENT_WEB_PASSWORD` | 设置/替换网页登录密码哈希 |
 | `CURSOR_API_KEY` | Agent 鉴权（也可在页面里粘贴） |
-| `AGENT_MODEL` | 默认模型 id |
-| `CURSOR_CHATS_ROOT` | 覆盖会话记录根目录 |
+| `HTTPS_PROXY` / `AGENT_HTTPS_PROXY` | Agent CLI 走的 HTTP 代理（不设则自动用 Clash/系统代理） |
+| `CURSOR_CHATS_ROOT` | 覆盖 CLI 会话 sqlite 根目录 |
+| `CURSOR_PROJECTS_ROOT` | 覆盖 IDE `~/.cursor/projects` 根目录 |
 | `AGENT_WEB_SESSION_DAYS` | Cookie 有效期（默认 7 天） |
 
 ## 许可

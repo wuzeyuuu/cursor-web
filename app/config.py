@@ -31,6 +31,9 @@ load_dotenv()
 CHATS_ROOT = Path(
     os.environ.get("CURSOR_CHATS_ROOT", Path.home() / ".cursor" / "chats")
 )
+PROJECTS_ROOT = Path(
+    os.environ.get("CURSOR_PROJECTS_ROOT", Path.home() / ".cursor" / "projects")
+)
 
 CHAT_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",

@@ -146,13 +146,25 @@ def get_session_token(handler: BaseHTTPRequestHandler) -> str:
     return morsel.value if morsel else ""
 
 
-def session_cookie_header(token: str, max_age: int | None = None) -> str:
+def request_is_https(handler: BaseHTTPRequestHandler) -> bool:
+    proto = handler.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower()
+    return proto == "https"
+
+
+def session_cookie_header(
+    token: str,
+    max_age: int | None = None,
+    *,
+    secure: bool = False,
+) -> str:
     parts = [
         f"{SESSION_COOKIE}={token}",
         "Path=/",
         "HttpOnly",
         "SameSite=Lax",
     ]
+    if secure:
+        parts.append("Secure")
     if max_age is None:
         parts.append(f"Max-Age={SESSION_TTL}")
     else:
@@ -160,8 +172,17 @@ def session_cookie_header(token: str, max_age: int | None = None) -> str:
     return "; ".join(parts)
 
 
-def clear_session_cookie_header() -> str:
-    return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+def clear_session_cookie_header(*, secure: bool = False) -> str:
+    parts = [
+        f"{SESSION_COOKIE}=",
+        "Path=/",
+        "HttpOnly",
+        "SameSite=Lax",
+        "Max-Age=0",
+    ]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
 
 
 def authorized(handler: BaseHTTPRequestHandler) -> bool:

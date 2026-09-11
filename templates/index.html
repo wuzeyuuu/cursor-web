@@ -34,6 +34,9 @@
   .session-item.active { background:#243044; border-color:#35507a; }
   .session-item .title { font-size:11px; line-height:1.25; margin-bottom:1px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .session-item .meta { font-size:9px; color:var(--muted); }
+  .session-item .badge.run { color:#9ece6a; border-color:#3d5a3d; }
+  .session-item .badge.wait { color:#e0af68; border-color:#6a5330; }
+  #chatHead .ide-note { color:var(--acc); }
   .chat-pane { flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden; padding:6px 8px calc(76px + env(safe-area-inset-bottom)); }
   #chatHead { font-size:10px; color:var(--muted); margin-bottom:4px; padding-bottom:4px; border-bottom:1px solid var(--line); line-height:1.3; }
   #chatHead strong { color:var(--txt); font-size:11px; }
@@ -52,12 +55,34 @@
   #taskStatus.success .dot { background:var(--ok); }
   #taskStatus.error .dot { background:var(--bad); }
   #taskStatus.stopped .dot { background:#c0caf5; }
-  #taskStatus.idle .dot { background:var(--muted); opacity:.6; }
+  #taskStatus.queued .dot { background:#e0af68; animation:pulse 1.2s ease-in-out infinite; }
+  #stopBtn { display:none; flex-shrink:0; background:var(--bad); color:#fff; padding:3px 8px; font-size:10px; }
+  #taskStatus.running #stopBtn, #taskStatus.queued #stopBtn { display:inline-flex; }
+  .queue-actions { display:flex; gap:4px; align-self:flex-end; max-width:92%; margin:-2px 0 4px; }
+  .queue-actions button { background:transparent; color:var(--muted); border:1px solid var(--line); padding:3px 7px; font-size:10px; font-weight:600; }
+  .queue-actions button[data-act="bump"] { color:#e0af68; border-color:#6a5330; }
+  .queue-actions button[data-act="cancel"] { color:var(--bad); }
   #taskStatus .label { font-weight:600; }
   #taskStatus .detail { color:var(--muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
   #log { display:flex; flex-direction:column; gap:5px; flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-bottom:4px; font-size:12px; }
   .msg { padding:6px 8px; border-radius:8px; white-space:pre-wrap; word-break:break-word; line-height:1.35; font-size:12px; }
+  .msg.md { white-space:normal; }
+  .msg.md p { margin:0 0 8px; white-space:pre-wrap; }
+  .msg.md p:last-child { margin-bottom:0; }
+  .msg.md h1, .msg.md h2, .msg.md h3 { margin:8px 0 6px; font-weight:600; line-height:1.3; }
+  .msg.md h1 { font-size:15px; } .msg.md h2 { font-size:14px; } .msg.md h3 { font-size:13px; }
+  .msg.md ul, .msg.md ol { margin:4px 0 8px; padding-left:18px; }
+  .msg.md li { margin:2px 0; }
+  .msg.md .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:6px 0; max-width:100%; }
+  .msg.md table { border-collapse:collapse; min-width:100%; font-size:11px; }
+  .msg.md th, .msg.md td { border:1px solid var(--line); padding:4px 7px; text-align:left; vertical-align:top; }
+  .msg.md th { background:#243044; font-weight:600; }
+  .msg.md tr:nth-child(even) td { background:#161a22; }
+  .msg.md code { font-family:ui-monospace,monospace; font-size:11px; background:#12151b; padding:1px 4px; border-radius:4px; }
+  .msg.md pre { background:#12151b; border:1px solid var(--line); border-radius:7px; padding:8px; overflow-x:auto; margin:6px 0; }
+  .msg.md pre code { padding:0; background:none; white-space:pre; }
+  .msg.md a { color:var(--acc); }
   .user { background:#243044; align-self:flex-end; max-width:92%; }
   .bot { background:var(--card); border:1px solid var(--line); align-self:flex-start; max-width:92%; }
   .tool { color:var(--muted); font-size:9px; font-family:ui-monospace,monospace; align-self:center; padding:3px 6px; }
@@ -105,6 +130,7 @@
   <span class="dot"></span>
   <span class="label">空闲</span>
   <span class="detail">暂无运行中的任务</span>
+  <button type="button" id="stopBtn" title="停止本会话正在跑的 Agent。排队中的消息也会全部取消。其它会话不受影响。">终止</button>
 </div>
 <main>
   <details class="settings">
@@ -138,7 +164,7 @@
       <div id="chatHead">请选一个会话，或新建</div>
       <div id="loadMore" hidden><button class="ghost" type="button" id="loadMoreBtn">加载更早消息</button></div>
       <div id="log"><div class="empty">点「会话」选一条，或新建</div></div>
-      <div class="hint">Enter 发送 · Shift+Enter 换行</div>
+      <div class="hint">Enter 发送 · 忙碌时排队 · 排队条可撤销 / 修改 / 硬入（打断当前立刻跑这条）</div>
     </section>
   </div>
 </main>
@@ -174,6 +200,7 @@ window.fetch = (url, opts = {}) => _fetch(url, Object.assign({credentials: "same
 });
 
 let currentChatId = null;
+let currentChatSource = null;
 let historyLimit = 40;
 
 function headers(extra = {}) {
@@ -181,31 +208,124 @@ function headers(extra = {}) {
 }
 
 const MODE_LABELS = {agent: "agent（可改文件）", ask: "ask（只读）", plan: "plan（只读规划）"};
-const JOB_LABELS = {idle:"空闲", running:"运行中", success:"已完成", error:"失败", stopped:"已终止"};
+const JOB_LABELS = {idle:"空闲", running:"运行中", queued:"排队中", success:"已完成", error:"失败", stopped:"已停止", cancelled:"已撤销"};
 
 let statusPollTimer = null;
-let localJobRunning = false;
-let chatAbort = null;
+const jobsByChat = new Map();
+const liveByChat = new Map();
+let sessionCache = new Map();
+let sessionOrder = [];
+let sessionEtag = "";
+let historyOldestRowid = null;
+let historyLatestRowid = null;
 
-function openSessions() { document.body.classList.add("sessions-open"); }
+function openSessions() {
+  document.body.classList.add("sessions-open");
+  loadSessions(currentChatId);
+}
 function closeSessionsDrawer() { document.body.classList.remove("sessions-open"); }
 
-function setSendMode(running) {
+function setSendMode(_running) {
   const btn = $("sendBtn");
   if (!btn) return;
-  btn.classList.toggle("stop", !!running);
-  btn.setAttribute("aria-label", running ? "终止" : "发送");
-  btn.title = running ? "终止当前任务" : "发送";
+  btn.classList.remove("stop");
+  btn.setAttribute("aria-label", "发送");
+  btn.title = "发送（忙碌时排队）";
+}
+
+function currentJob() {
+  return jobsByChat.get(currentChatId) || {state:"idle"};
+}
+
+function rememberJobs(jobs, fallback) {
+  for (const j of jobs || []) {
+    if (j?.chat_id) jobsByChat.set(j.chat_id, j);
+  }
+  if (fallback?.chat_id) jobsByChat.set(fallback.chat_id, fallback);
+}
+
+function chatHasLive(chatId) {
+  return (liveByChat.get(chatId) || []).some((s) => s.alive);
+}
+
+function attachLive(chatId) {
+  const log = $("log");
+  const have = new Set(
+    [...log.querySelectorAll(".msg.user")].map((el) => msgRaw(el))
+  );
+  for (const s of liveByChat.get(chatId) || []) {
+    if (s.user && !s.user.isConnected) {
+      const key = msgRaw(s.user);
+      if (!have.has(key)) {
+        log.appendChild(s.user);
+        have.add(key);
+      }
+    }
+    if (s.bar && !s.bar.isConnected && s.user?.isConnected) s.user.insertAdjacentElement("afterend", s.bar);
+    if (s.bot && !s.bot.isConnected) log.appendChild(s.bot);
+  }
+}
+
+function bindQueueActions(live) {
+  if (live.bar || !live.turnId) return;
+  const bar = document.createElement("div");
+  bar.className = "queue-actions";
+  bar.innerHTML = '<button type="button" data-act="edit">修改</button><button type="button" data-act="bump">硬入</button><button type="button" data-act="cancel">撤销</button>';
+  bar.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    const act = btn && btn.getAttribute("data-act");
+    if (act) onQueueAct(live, act);
+  });
+  live.bar = bar;
+  if (live.user?.isConnected) live.user.insertAdjacentElement("afterend", bar);
+  else if (live.bot?.parentNode) live.bot.parentNode.insertBefore(bar, live.bot);
+}
+
+function hideQueueActions(live) {
+  if (live.bar) {
+    live.bar.remove();
+    live.bar = null;
+  }
+}
+
+async function onQueueAct(live, act) {
+  if (!live.turnId) return;
+  const body = {chat_id: live.chatId, turn_id: live.turnId};
+  if (act === "edit") {
+    const next = window.prompt("修改排队中的内容", live.prompt || msgRaw(live.user) || "");
+    if (next == null) return;
+    const text = next.trim();
+    if (!text) return;
+    const r = await fetch("/api/queue/edit", {method:"POST", headers: headers(), body: JSON.stringify(Object.assign({text}, body))});
+    const d = await r.json().catch(() => ({}));
+    if (!d.ok) { alert("已经开始执行，不能改了"); return; }
+    live.prompt = text;
+    if (live.user) {
+      live.user.dataset.raw = text;
+      live.user.textContent = text;
+    }
+    return;
+  }
+  if (act === "cancel") {
+    const r = await fetch("/api/queue/cancel", {method:"POST", headers: headers(), body: JSON.stringify(body)});
+    const d = await r.json().catch(() => ({}));
+    if (!d.ok) { alert("已经开始执行，不能撤销"); return; }
+    return;
+  }
+  if (act === "bump") {
+    if (!confirm("打断当前正在跑的任务，立刻执行这一条？后面排队的仍按顺序接着跑。")) return;
+    const r = await fetch("/api/queue/bump", {method:"POST", headers: headers(), body: JSON.stringify(body)});
+    const d = await r.json().catch(() => ({}));
+    if (!d.ok) { alert("已经开始执行，不能硬入"); return; }
+  }
 }
 
 async function stopJob() {
+  const id = currentChatId;
+  if (!id) return;
   try {
-    await fetch("/api/stop", {method:"POST", headers: headers(), body: "{}"});
+    await fetch("/api/stop", {method:"POST", headers: headers(), body: JSON.stringify({chat_id: id})});
   } catch {}
-  if (chatAbort) {
-    chatAbort.abort();
-    chatAbort = null;
-  }
 }
 
 function fmtElapsed(s) {
@@ -216,16 +336,20 @@ function fmtElapsed(s) {
 
 function renderTaskStatus(job) {
   const el = $("taskStatus");
-  if (!job) job = {state:"idle"};
+  if (!job) job = currentJob();
   const state = job.state || "idle";
   el.className = state;
   el.querySelector(".label").textContent = JOB_LABELS[state] || state;
-  setSendMode(state === "running");
+  const others = [...jobsByChat.values()].filter((j) => j.chat_id && j.chat_id !== currentChatId && (j.state === "running" || j.state === "queued"));
   let detail = "";
   if (state === "running") {
     detail = fmtElapsed(job.elapsed_s) || "0s";
+    if (job.queue) detail += " · 另有 " + job.queue + " 条排队";
     if (job.last_tool) detail += " · " + job.last_tool;
     else if (job.last_event) detail += " · " + job.last_event;
+    if (job.prompt) detail += " · " + job.prompt;
+  } else if (state === "queued") {
+    detail = (job.queue_pos ? "第 " + job.queue_pos + " 位" : "等待中");
     if (job.prompt) detail += " · " + job.prompt;
   } else if (state === "success") {
     detail = (job.elapsed_s != null ? "用时 " + fmtElapsed(job.elapsed_s) : "") + (job.prompt ? " · " + job.prompt : "");
@@ -234,9 +358,32 @@ function renderTaskStatus(job) {
   } else if (state === "stopped") {
     detail = "已手动终止" + (job.elapsed_s != null ? " · " + fmtElapsed(job.elapsed_s) : "");
   } else {
-    detail = "暂无运行中的任务";
+    detail = others.length ? (others.length + " 个其它会话在运行") : "暂无运行中的任务";
   }
   el.querySelector(".detail").textContent = detail.trim() || "—";
+}
+
+function applyJobEvent(job) {
+  if (job?.chat_id) {
+    const prev = jobsByChat.get(job.chat_id);
+    if (job.state === "queued" && prev && prev.state === "running") {
+      jobsByChat.set(job.chat_id, Object.assign({}, prev, {queue: job.queue || prev.queue}));
+    } else if (job.state === "cancelled" && prev && prev.state === "running") {
+      jobsByChat.set(job.chat_id, prev);
+    } else {
+      jobsByChat.set(job.chat_id, job);
+    }
+    const next = jobsByChat.get(job.chat_id);
+    if (!prev || prev.state !== next.state || prev.queue !== next.queue) {
+      const sessions = orderedSessions();
+      if (sessions.length) renderSessionList(sessions, currentChatId);
+    }
+  }
+  renderTaskStatus(currentJob());
+}
+
+function anyJobActive() {
+  return [...jobsByChat.values()].some((j) => j.state === "running" || j.state === "queued") || [...liveByChat.values()].some((list) => list.some((s) => s.alive));
 }
 
 function scheduleStatusPoll(active) {
@@ -246,9 +393,9 @@ function scheduleStatusPoll(active) {
     const r = await fetch("/api/status", {headers: headers()}).catch(() => null);
     if (!r?.ok) return;
     const s = await r.json();
-    renderTaskStatus(s.job);
-    if (s.job?.state !== "running") localJobRunning = false;
-    if (s.job?.state !== "running" && !localJobRunning) scheduleStatusPoll(false);
+    rememberJobs(s.jobs, s.job);
+    renderTaskStatus(currentJob());
+    if (!anyJobActive()) scheduleStatusPoll(false);
   }, ms);
 }
 
@@ -306,12 +453,125 @@ async function loadModels(selected) {
   renderModelOptions(data.models || [], selected || data.model || DEFAULT_MODEL);
 }
 
-function addMsg(cls, text) {
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function inlineMd(s) {
+  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return s;
+}
+
+function isMdTableSep(line) {
+  const t = line.trim();
+  if (!t.includes("-")) return false;
+  return /^[\s|:-]+$/.test(t) && /---/.test(t);
+}
+
+function splitMdCells(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+function renderMarkdown(src) {
+  const lines = String(src).replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (/^```/.test(lines[i])) {
+      i++;
+      const buf = [];
+      while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      if (i < lines.length) i++;
+      out.push("<pre><code>" + escapeHtml(buf.join("\n")) + "</code></pre>");
+      continue;
+    }
+    if (i + 1 < lines.length && lines[i].includes("|") && isMdTableSep(lines[i + 1])) {
+      const rows = [splitMdCells(lines[i])];
+      i += 2;
+      while (i < lines.length && lines[i].includes("|") && !isMdTableSep(lines[i])) {
+        rows.push(splitMdCells(lines[i]));
+        i++;
+      }
+      const cols = Math.max(...rows.map((r) => r.length));
+      const body = rows.map((r, ri) => {
+        const tag = ri === 0 ? "th" : "td";
+        const cells = [];
+        for (let c = 0; c < cols; c++) cells.push("<" + tag + ">" + inlineMd(escapeHtml(r[c] || "")) + "</" + tag + ">");
+        return "<tr>" + cells.join("") + "</tr>";
+      });
+      out.push("<div class=\"table-wrap\"><table><thead>" + body[0] + "</thead><tbody>" + body.slice(1).join("") + "</tbody></table></div>");
+      continue;
+    }
+    const hm = /^(#{1,3})\s+(.+)$/.exec(lines[i]);
+    if (hm) {
+      const n = hm[1].length;
+      out.push("<h" + n + ">" + inlineMd(escapeHtml(hm[2])) + "</h" + n + ">");
+      i++;
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(lines[i])) {
+      out.push("<ul>");
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        out.push("<li>" + inlineMd(escapeHtml(lines[i].replace(/^\s*[-*]\s+/, ""))) + "</li>");
+        i++;
+      }
+      out.push("</ul>");
+      continue;
+    }
+    if (!lines[i].trim()) { i++; continue; }
+    const buf = [];
+    while (i < lines.length && lines[i].trim()) {
+      if (/^```/.test(lines[i])) break;
+      if (i + 1 < lines.length && lines[i].includes("|") && isMdTableSep(lines[i + 1])) break;
+      buf.push(lines[i]);
+      i++;
+    }
+    out.push("<p>" + inlineMd(escapeHtml(buf.join("\n"))) + "</p>");
+  }
+  return out.join("") || "<p></p>";
+}
+
+function fillMarkdown(el, text) {
+  el.dataset.raw = text;
+  el.classList.add("md");
+  el.innerHTML = renderMarkdown(text);
+}
+
+function msgRaw(el) {
+  return el.dataset.raw || el.textContent || "";
+}
+
+function addMsg(cls, text, rowid) {
   const el = document.createElement("div");
   el.className = "msg " + cls;
-  el.textContent = text;
+  if (rowid != null) el.dataset.rowid = String(rowid);
+  if (cls === "bot") fillMarkdown(el, text);
+  else {
+    el.dataset.raw = text;
+    el.textContent = text;
+  }
   $("log").appendChild(el);
   el.scrollIntoView({behavior:"smooth", block:"end"});
+  return el;
+}
+
+function makeMsgEl(m) {
+  const el = document.createElement("div");
+  el.className = "msg " + (m.role === "user" ? "user" : "bot");
+  if (m.rowid != null) el.dataset.rowid = String(m.rowid);
+  if (m.role === "user") {
+    el.dataset.raw = m.text;
+    el.textContent = m.text;
+  } else fillMarkdown(el, m.text);
   return el;
 }
 
@@ -321,15 +581,76 @@ function renderLog(messages) {
     $("log").innerHTML = '<div class="empty">这条会话还没有消息</div>';
     return;
   }
-  for (const m of messages) addMsg(m.role === "user" ? "user" : "bot", m.text);
+  for (const m of messages) $("log").appendChild(makeMsgEl(m));
+  $("log").lastChild?.scrollIntoView({block:"end"});
 }
 
-function updateChatHead(preview, chatId) {
+function rememberHistoryBounds(data, mode) {
+  if (!data) return;
+  if (mode === "replace") {
+    historyOldestRowid = data.oldest_rowid ?? null;
+    historyLatestRowid = data.latest_rowid ?? null;
+  } else if (mode === "prepend" && data.oldest_rowid != null) {
+    historyOldestRowid = data.oldest_rowid;
+  } else if (mode === "append" && data.latest_rowid != null) {
+    historyLatestRowid = data.latest_rowid;
+  }
+}
+
+function applyHistory(data, mode) {
+  if (data.source) currentChatSource = data.source;
+  const msgs = data.messages || [];
+  if (mode === "replace") {
+    renderLog(msgs);
+  } else if (mode === "prepend") {
+    if (!msgs.length) {
+      $("loadMore").hidden = true;
+      return;
+    }
+    const log = $("log");
+    const empty = log.querySelector(".empty");
+    if (empty) empty.remove();
+    const prev = log.scrollHeight;
+    const frag = document.createDocumentFragment();
+    for (const m of msgs) frag.appendChild(makeMsgEl(m));
+    log.insertBefore(frag, log.firstChild);
+    log.scrollTop += log.scrollHeight - prev;
+  } else if (mode === "append") {
+    if (!msgs.length) {
+      rememberHistoryBounds(data, mode);
+      return;
+    }
+    const have = new Set(
+      [...$("log").querySelectorAll(".msg.user, .msg.bot")].map((el) => {
+        const role = el.classList.contains("user") ? "user" : "bot";
+        return role + "\n" + msgRaw(el);
+      })
+    );
+    const empty = $("log").querySelector(".empty");
+    if (empty) empty.remove();
+    for (const m of msgs) {
+      const key = (m.role === "user" ? "user" : "bot") + "\n" + m.text;
+      if (have.has(key)) continue;
+      addMsg(m.role === "user" ? "user" : "bot", m.text, m.rowid);
+    }
+  }
+  rememberHistoryBounds(data, mode);
+  if (mode !== "append") {
+    $("loadMore").hidden = !(data.truncated || data.has_older);
+    if (!$("loadMore").hidden) $("loadMoreBtn").textContent = "加载更早消息";
+  }
+}
+
+function updateChatHead(preview, chatId, source) {
   if (!chatId) {
     $("chatHead").textContent = "请选一个会话，或新建";
     return;
   }
-  $("chatHead").innerHTML = "当前：<strong>" + (preview || chatId.slice(0,8)) + "</strong> · " + chatId.slice(0,8);
+  const src = source || currentChatSource || (sessionCache.get(chatId) || {}).source;
+  currentChatSource = src || currentChatSource;
+  let html = "当前：<strong>" + escapeHtml(preview || chatId.slice(0,8)) + "</strong> · " + chatId.slice(0,8);
+  if (src === "ide") html += '<span class="ide-note"> · IDE 只读，发送会开新 CLI 会话</span>';
+  $("chatHead").innerHTML = html;
 }
 
 function renderSessionList(sessions, activeId) {
@@ -344,44 +665,81 @@ function renderSessionList(sessions, activeId) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "session-item" + (s.id === activeId ? " active" : "");
-    btn.innerHTML = '<div class="title">' + (s.preview || "空会话") + '</div><div class="meta">' + fmtTime(s.updated_at) + " · " + s.id.slice(0,8) + '</div>';
-    btn.onclick = () => switchSession(s.id, s.preview);
+    const badge = s.source === "ide" ? '<span class="badge">IDE</span>' : "";
+    const job = jobsByChat.get(s.id);
+    let jobBadge = "";
+    if (job?.state === "running") jobBadge = '<span class="badge run">运行</span>';
+    else if (job?.state === "queued" || job?.queue) jobBadge = '<span class="badge wait">排队</span>';
+    btn.innerHTML = '<div class="title">' + badge + jobBadge + escapeHtml(s.preview || "空会话") + '</div><div class="meta">' + fmtTime(s.updated_at) + " · " + s.id.slice(0,8) + '</div>';
+    btn.onclick = () => switchSession(s.id, s.preview, s.source);
     box.appendChild(btn);
   }
 }
 
+function orderedSessions() {
+  return sessionOrder.map((id) => sessionCache.get(id)).filter(Boolean);
+}
+
 async function loadSessions(activeId) {
-  const r = await fetch("/api/sessions", {headers: headers()});
-  if (!r.ok) return [];
+  const known = [];
+  sessionCache.forEach((v, id) => {
+    if (v && v.updated_at != null) known.push(id + ":" + v.updated_at);
+  });
+  const url = "/api/sessions" + (known.length ? "?known=" + encodeURIComponent(known.join(",")) : "");
+  const hdrs = headers();
+  if (sessionEtag) hdrs["If-None-Match"] = sessionEtag;
+  const r = await fetch(url, {headers: hdrs});
+  if (r.status === 304) return orderedSessions();
+  if (!r.ok) return orderedSessions();
   const data = await r.json();
-  renderSessionList(data.sessions || [], activeId);
-  return data.sessions || [];
-}
-
-async function loadHistory(chatId, limit = historyLimit) {
-  if (!chatId) { renderLog([]); $("loadMore").hidden = true; return; }
-  const r = await fetch("/api/history?chat_id=" + encodeURIComponent(chatId) + "&limit=" + limit, {headers: headers()});
-  if (!r.ok) return;
-  const data = await r.json();
-  renderLog(data.messages || []);
-  $("loadMore").hidden = !data.truncated;
-  if (data.truncated) {
-    $("loadMoreBtn").textContent = "加载更早消息（已显示 " + data.messages.length + " / " + data.total + "）";
+  sessionEtag = r.headers.get("ETag") || data.etag || sessionEtag;
+  const next = [];
+  for (const s of data.sessions || []) {
+    const prev = sessionCache.get(s.id);
+    if (s.unchanged && prev) {
+      const merged = Object.assign({}, prev, s, {preview: prev.preview});
+      sessionCache.set(s.id, merged);
+      next.push(merged);
+    } else {
+      sessionCache.set(s.id, s);
+      next.push(s);
+    }
   }
+  sessionOrder = next.map((s) => s.id);
+  renderSessionList(next, activeId);
+  return next;
 }
 
-async function switchSession(chatId, preview) {
+async function loadHistory(chatId, opts = {}) {
+  const after = opts.after;
+  const before = opts.before;
+  const limit = opts.limit != null ? opts.limit : historyLimit;
+  if (!chatId) {
+    renderLog([]);
+    $("loadMore").hidden = true;
+    historyOldestRowid = historyLatestRowid = null;
+    return;
+  }
+  const params = new URLSearchParams({chat_id: chatId, limit: String(limit || 40)});
+  let mode = "replace";
+  if (after != null) { params.set("after_rowid", String(after)); mode = "append"; }
+  if (before != null) { params.set("before_rowid", String(before)); mode = "prepend"; }
+  const r = await fetch("/api/history?" + params.toString(), {headers: headers()});
+  if (!r.ok) return;
+  applyHistory(await r.json(), mode);
+}
+
+async function switchSession(chatId, preview, source) {
   const r = await fetch("/api/switch-chat", {method:"POST", headers: headers(), body: JSON.stringify({chat_id: chatId})});
   const data = await r.json();
   if (!r.ok) { alert(data.error || "切换失败"); return; }
   currentChatId = chatId;
+  currentChatSource = data.source || source || null;
   historyLimit = 40;
-  updateChatHead(preview, chatId);
-  renderLog(data.messages || []);
-  $("loadMore").hidden = !data.truncated;
-  if (data.truncated) {
-    $("loadMoreBtn").textContent = "加载更早消息（已显示 " + data.messages.length + " / " + data.total + "）";
-  }
+  updateChatHead(preview, chatId, currentChatSource);
+  applyHistory(data, "replace");
+  attachLive(chatId);
+  renderTaskStatus(currentJob());
   await loadSessions(chatId);
   closeSessionsDrawer();
 }
@@ -398,23 +756,27 @@ async function refreshStatus() {
   el.textContent = s.has_key
     ? ("已配置 API key · " + mode + " · " + model + (speed === "fast" ? " · 快速" : "") + " · " + (s.chat_id ? s.chat_id.slice(0,8) : "未选会话"))
     : "还没填 API key";
-  renderTaskStatus(s.job);
-  if (s.job?.state === "running") {
-    localJobRunning = true;
+  rememberJobs(s.jobs, s.job);
+  renderTaskStatus(currentJob());
+  if (anyJobActive()) {
     scheduleStatusPoll(true);
-  } else if (!localJobRunning) {
+  } else {
     scheduleStatusPoll(false);
   }
   $("workspace").value = s.workspace || "";
   $("mode").value = mode;
   $("speed").value = speed;
-  await loadModels(model);
+  if (!$("model").options.length) await loadModels(model);
+  else if ([...$("model").options].some((o) => o.value === model)) $("model").value = model;
   updateModeHint(mode, model, speed, s.resolved_model);
   currentChatId = s.chat_id || currentChatId;
+  currentChatSource = s.chat_source || currentChatSource;
   const sessions = await loadSessions(s.chat_id);
+  renderSessionList(sessions, s.chat_id || currentChatId);
   if (s.chat_id) {
     const cur = (sessions || []).find(x => x.id === s.chat_id);
-    updateChatHead(cur?.preview, s.chat_id);
+    currentChatSource = cur?.source || s.chat_source || currentChatSource;
+    updateChatHead(cur?.preview, s.chat_id, currentChatSource);
   }
   return s;
 }
@@ -479,8 +841,10 @@ async function createNewChat() {
   const s = await r.json();
   if (!r.ok) { alert(s.error || "失败"); return null; }
   currentChatId = s.chat_id;
+  currentChatSource = "cli";
   historyLimit = 40;
-  updateChatHead("新会话", s.chat_id);
+  historyOldestRowid = historyLatestRowid = null;
+  updateChatHead("新会话", s.chat_id, "cli");
   renderLog([]);
   $("loadMore").hidden = true;
   await loadSessions(s.chat_id);
@@ -508,29 +872,21 @@ document.addEventListener("keydown", (e) => {
 });
 
 $("loadMoreBtn").onclick = async () => {
-  if (!currentChatId) return;
-  historyLimit = Math.min(historyLimit + 40, 9999);
-  await loadHistory(currentChatId, historyLimit);
+  if (!currentChatId || historyOldestRowid == null) return;
+  await loadHistory(currentChatId, {before: historyOldestRowid});
 };
 
 $("prompt").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    if (localJobRunning) return;
     $("composer").requestSubmit();
   }
 });
 
-$("sendBtn").addEventListener("click", (e) => {
-  if (localJobRunning) {
-    e.preventDefault();
-    stopJob();
-  }
-});
+$("stopBtn").onclick = () => stopJob();
 
 $("composer").onsubmit = async (e) => {
   e.preventDefault();
-  if (localJobRunning) return;
   const text = $("prompt").value.trim();
   if (!text) return;
   if ($("apiKey").value.trim()) {
@@ -539,46 +895,46 @@ $("composer").onsubmit = async (e) => {
   }
   let st = await fetch("/api/status", {headers: headers()}).then(r => r.json()).catch(() => ({}));
   if (!st.has_key) { alert("还没配置 API key"); return; }
-  if (!st.chat_id) {
+  if (!currentChatId && !st.chat_id) {
     await createNewChat();
     st = await fetch("/api/status", {headers: headers()}).then(r => r.json());
     if (!st.chat_id) return;
   }
+  const chatId = currentChatId || st.chat_id;
   $("prompt").value = "";
-  addMsg("user", text);
-  const bot = addMsg("bot", "正在启动 agent…");
-  localJobRunning = true;
-  renderTaskStatus({state:"running", elapsed_s:0, last_event:"连接中", prompt:text.slice(0,80)});
+  const userEl = addMsg("user", text);
+  const bot = addMsg("bot", "排队中 / 正在启动…");
+  const abort = new AbortController();
+  const live = {chatId, user: userEl, bot, abort, alive: true, prompt: text, turnId: null};
+  if (!liveByChat.has(chatId)) liveByChat.set(chatId, []);
+  liveByChat.get(chatId).push(live);
+  applyJobEvent({chat_id: chatId, state: "queued", prompt: text.slice(0,80)});
   scheduleStatusPoll(true);
-  chatAbort = new AbortController();
   let res;
   try {
     res = await fetch("/api/chat", {
       method:"POST",
       headers: headers(),
-      body: JSON.stringify({text, mode: $("mode").value, model: $("model").value, speed: $("speed").value}),
-      signal: chatAbort.signal,
+      body: JSON.stringify({text, chat_id: chatId, mode: $("mode").value, model: $("model").value, speed: $("speed").value}),
+      signal: abort.signal,
     });
   } catch (err) {
-    localJobRunning = false;
+    live.alive = false;
     if (err && err.name === "AbortError") {
-      if (bot.textContent.startsWith("正在启动")) bot.textContent = "已终止";
-      renderTaskStatus({state:"stopped"});
-      scheduleStatusPoll(false);
+      if ((bot.dataset.raw || bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动")) bot.textContent = "已终止";
+      applyJobEvent({chat_id: chatId, state: "stopped"});
       return;
     }
     bot.textContent = String(err);
-    renderTaskStatus({state:"error", error: String(err)});
-    scheduleStatusPoll(false);
+    applyJobEvent({chat_id: chatId, state: "error", error: String(err)});
     return;
   }
   if (!res.ok) {
-    localJobRunning = false;
+    live.alive = false;
     let msg = await res.text();
     try { const j = JSON.parse(msg); msg = j.error || j.hint || msg; } catch {}
     bot.textContent = msg;
-    renderTaskStatus({state:"error", error: msg});
-    scheduleStatusPoll(false);
+    applyJobEvent({chat_id: chatId, state: "error", error: msg});
     return;
   }
   const reader = res.body.getReader();
@@ -596,33 +952,101 @@ $("composer").onsubmit = async (e) => {
         if (!line) continue;
         let ev; try { ev = JSON.parse(line); } catch { continue; }
         if (ev.type === "job") {
-          renderTaskStatus(ev);
-          if (ev.state === "stopped" && bot.textContent.startsWith("正在启动")) bot.textContent = "已终止";
+          if (ev.turn_id) live.turnId = ev.turn_id;
+          applyJobEvent(ev);
+          if (ev.state === "queued") {
+            bindQueueActions(live);
+            const n = ev.queue_pos ? ("排队中（第 " + ev.queue_pos + " 位）…") : "排队中…";
+            if ((bot.dataset.raw || bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动") || (bot.textContent || "").startsWith("排队中")) {
+              bot.textContent = n;
+              bot.dataset.raw = n;
+            }
+          } else if (ev.state === "running") {
+            hideQueueActions(live);
+            if ((bot.dataset.raw || bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动") || (bot.textContent || "").startsWith("排队中")) {
+              bot.textContent = "正在启动 agent…";
+              bot.dataset.raw = "正在启动 agent…";
+            }
+          } else if (ev.state === "cancelled") {
+            hideQueueActions(live);
+            bot.textContent = "已撤销";
+            bot.dataset.raw = "已撤销";
+          } else if (ev.state === "stopped" && ((bot.dataset.raw || bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动") || (bot.textContent || "").startsWith("排队中"))) {
+            hideQueueActions(live);
+            bot.textContent = "已停止";
+          }
+        } else if (ev.type === "turn") {
+          live.turnId = ev.turn_id;
+          if (ev.prompt) {
+            live.prompt = ev.prompt;
+            if (live.user && ev.state !== "running") {
+              live.user.dataset.raw = ev.prompt;
+              live.user.textContent = ev.prompt;
+            }
+          }
+          if (ev.state === "running") hideQueueActions(live);
+          if (ev.state === "cancelled") {
+            hideQueueActions(live);
+            bot.textContent = "已撤销";
+            bot.dataset.raw = "已撤销";
+          }
+        } else if (ev.type === "chat" && ev.chat_id) {
+          if (ev.turn_id) live.turnId = ev.turn_id;
+          if (ev.chat_id !== chatId) {
+            live.chatId = ev.chat_id;
+            const list = liveByChat.get(chatId) || [];
+            liveByChat.set(ev.chat_id, (liveByChat.get(ev.chat_id) || []).concat(live));
+            liveByChat.set(chatId, list.filter((x) => x !== live));
+          }
+          if (currentChatId === chatId || ev.forked_from === currentChatId) {
+            currentChatId = ev.chat_id;
+            currentChatSource = ev.source || "cli";
+            const preview = ev.forked_from ? "新 CLI 会话（由 IDE 发出）" : (sessionCache.get(ev.chat_id) || {}).preview;
+            updateChatHead(preview, ev.chat_id, "cli");
+            loadSessions(ev.chat_id);
+          }
         } else if (ev.type === "text") {
-          if (bot.textContent.startsWith("正在启动")) bot.textContent = "";
-          bot.textContent += ev.text;
-        } else if (ev.type === "tool") addMsg("tool", ev.text);
-        else if (ev.type === "error") bot.textContent += "\n" + ev.text;
-        else if (ev.type === "done") { localJobRunning = false; refreshStatus(); }
+          let raw = bot.dataset.raw || "";
+          if (raw.startsWith("排队") || raw.startsWith("正在启动") || (bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动")) raw = "";
+          fillMarkdown(bot, raw + ev.text);
+          if (currentChatId === chatId && !bot.isConnected) $("log").appendChild(bot);
+        } else if (ev.type === "tool") {
+          if (currentChatId === chatId) addMsg("tool", ev.text);
+        } else if (ev.type === "error") {
+          let raw = bot.dataset.raw || bot.textContent || "";
+          if (raw.startsWith("排队") || raw.startsWith("正在启动")) raw = "";
+          fillMarkdown(bot, raw + "\n" + ev.text);
+        } else if (ev.type === "done") {
+          live.alive = false;
+          refreshStatus();
+        }
       }
     }
   } catch (err) {
     if (!(err && err.name === "AbortError")) {
       bot.textContent += "\n" + String(err);
-    } else if (bot.textContent.startsWith("正在启动")) {
+    } else if ((bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动")) {
       bot.textContent = "已终止";
     }
   }
-  localJobRunning = false;
-  chatAbort = null;
-  scheduleStatusPoll(false);
+  live.alive = false;
+  if (!anyJobActive()) scheduleStatusPoll(false);
 };
+
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState !== "visible") return;
+  await refreshStatus();
+  if (!currentChatId || chatHasLive(currentChatId)) return;
+  if (historyLatestRowid != null) await loadHistory(currentChatId, {after: historyLatestRowid});
+  else await loadHistory(currentChatId);
+});
 
 (async () => {
   const s = await refreshStatus();
   if (s?.chat_id) {
     currentChatId = s.chat_id;
-    await loadHistory(s.chat_id, historyLimit);
+    await loadHistory(s.chat_id);
+    attachLive(s.chat_id);
   }
 })();
 </script>
