@@ -29,6 +29,7 @@ def load_state() -> dict:
         data.setdefault("mode", "agent")
         data.setdefault("model", DEFAULT_MODEL)
         data.setdefault("speed", "default")
+        data.setdefault("show_thinking", False)
         if changed:
             save_json(STATE_PATH, data, 0o644)
         return data

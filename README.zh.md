@@ -103,16 +103,20 @@ python server.py
 
 ## Cloudflare Tunnel（公网 HTTPS）
 
-这个应用必须留在 **这台机器** 上（它要调本地 `agent`）。不要当成 Worker 去部署。Windows 服务 `cloudflared` 已经在跑 named tunnel **cursor**（`27a9add3-53d2-45bf-8cfd-b2ba1a3b6853`）。不要再开 Quick Tunnel（`trycloudflare.com`），网址会变，而且不支持 SSE。
+这个应用必须留在 **这台机器** 上（它要调本地 `agent`）。不要当成 Worker 去部署。用 named Cloudflare Tunnel。不要把 tunnel token 或带真实域名的脚本提交进仓库。
 
-在 Zero Trust → Networks → Tunnels → **cursor** → Public Hostname 加一条（只需一次）：
+```bat
+copy tunnel.bat.example tunnel.bat
+copy start.bat.example start.bat
+```
 
-- 子域：`cursor`
-- 域名：`klinedance.kdns.fr`（另一个已激活的是 `klinedance.dpdns.org`）
-- 类型：HTTP
-- URL：`127.0.0.1:8786`
+```bash
+cp tunnel.sh.example tunnel.sh
+cp start.sh.example start.sh
+chmod +x start.sh tunnel.sh
+```
 
-然后保持 `start.bat` 运行，打开 `https://cursor.klinedance.kdns.fr/login`。`tunnel.bat` 只打印状态，不会再起一条隧道。
+在 `tunnel.bat` / `tunnel.sh` 里改 `PUBLIC_URL`（或在 `.env` 里设 `TUNNEL_PUBLIC_URL`）。Zero Trust → Networks → Tunnels → 你的隧道 → Public Hostname：类型选 **HTTP**（不要 HTTPS），URL `127.0.0.1:8786`。保持 `start.bat` / `start.sh` 运行，打开 `https://你的域名/login`。本地 `tunnel.*` 只打印状态，不会再起一条隧道。
 
 这等于把能改文件的 Agent 暴露到公网。请保留网页密码，named hostname 上优先开 Cloudflare Access，不要把 URL 随便发给人。
 
@@ -127,8 +131,8 @@ python server.py
 
 ## 发到 GitHub 前检查
 
-1. 本地把 `.env.example` 复制成 `.env`。不要把真实密钥写进 example。
-2. 确认 `.gitignore` 忽略了 `secrets.json`、`state.json`、`.env`。
+1. 本地把 `.env.example` 复制成 `.env`，把 `*.example` 启动脚本复制成 `start.bat` / `start.sh` / `tunnel.bat` / `tunnel.sh`。不要把真实密钥或域名写进 example。
+2. 确认 `.gitignore` 忽略了 `secrets.json`、`state.json`、`.env`、`start.bat`、`start.sh`、`tunnel.bat`、`tunnel.sh`。
 3. `git status` 里不能出现 API key、密码哈希、会话 token，或别的机器路径（`/mnt/...`、`/workspace/...`）。
 4. `secrets.example.json` 和 `state.example.json` 里不要有凭证。
 5. 不要提交 `~/.cursor/chats` 下的会话数据库。

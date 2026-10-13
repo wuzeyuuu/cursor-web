@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# Copy this file to tunnel.sh and set PUBLIC_URL.
+# tunnel.sh is gitignored so your hostname is not uploaded.
+
+PUBLIC_URL="${TUNNEL_PUBLIC_URL:-https://YOUR-HOST.example.com}"
+ORIGIN="http://127.0.0.1:8786"
+
+echo "Named Cloudflare Tunnel should already be running (cloudflared)."
+echo "Do NOT start a Quick Tunnel (trycloudflare.com changes every time, no SSE)."
+echo
+echo "Public hostname in Zero Trust -> Tunnels -> your tunnel -> Public Hostname:"
+echo "  Type HTTP  (not HTTPS)"
+echo "  URL 127.0.0.1:8786"
+echo
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl is-active cloudflared 2>/dev/null || true
+fi
+
+curl -s -o /dev/null -w "local 8786: HTTP %{http_code}\n" --max-time 5 "${ORIGIN}/login"
+echo
+echo "Keep start.sh running, then open:"
+echo "  ${PUBLIC_URL}/login"

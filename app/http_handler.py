@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import json
 import os
-from http.server import BaseHTTPRequestHandler
+import sys
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+_REPO = Path(__file__).resolve().parents[3]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from daily_indicator.review.ledger_server import LedgerHandler  # noqa: E402
 
 from .agent_cli import (
     build_agent_args,
     ensure_chat_id,
     list_available_models,
+    log_agent,
     resolve_model,
     stream_chat_with_retries,
 )
@@ -68,8 +75,68 @@ def json_bytes(data: dict, code: int = 200) -> tuple[int, bytes]:
     return code, json.dumps(data).encode()
 
 
-class Handler(BaseHTTPRequestHandler):
+_LEDGER_EXACT = {
+    "/api/health",
+    "/api/universe",
+    "/api/dates",
+    "/api/mindset",
+    "/api/questions",
+    "/api/symbols",
+    "/api/watchlist",
+}
+
+
+def _is_ledger_path(path: str) -> bool:
+    if path in {"/reviewpools", "/reviewpools/"}:
+        return True
+    if path in {"/review", "/eod"} or path.startswith("/review/") or path.startswith("/eod/"):
+        return True
+    if path in _LEDGER_EXACT or path.startswith("/api/mindset/") or path.startswith("/api/questions/"):
+        return True
+    return (
+        path.startswith("/api/symbol/")
+        or path.startswith("/api/md/")
+        or path.startswith("/api/chart/")
+        or path.startswith("/api/drawings/")
+    )
+
+
+class Handler(LedgerHandler):
     server_version = "cursor-web-agent/1"
+
+    def _serve_ledger(self) -> bool:
+        path = urlparse(self.path).path
+        if not _is_ledger_path(path):
+            return False
+        if self.command != "OPTIONS" and not authorized(self):
+            if path.startswith("/api/"):
+                self._need_auth()
+            else:
+                self._redirect("/login")
+            return True
+        method = getattr(LedgerHandler, f"do_{self.command}", None)
+        if method is None:
+            self._send(405, b'{"error":"method not allowed"}', "application/json")
+            return True
+        method(self)
+        return True
+
+    def do_PUT(self) -> None:
+        if self._serve_ledger():
+            return
+        self._send(404, b'{"error":"not found"}', "application/json")
+
+    def do_DELETE(self) -> None:
+        if self._serve_ledger():
+            return
+        self._send(404, b'{"error":"not found"}', "application/json")
+
+    def do_OPTIONS(self) -> None:
+        if self._serve_ledger():
+            return
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, fmt: str, *args) -> None:
         if "/api/" in (args[0] if args else ""):
@@ -110,8 +177,32 @@ class Handler(BaseHTTPRequestHandler):
         self._send(401, body, "application/json")
         return False
 
+    def _send_qq_dd(self, path: str) -> None:
+        from daily_indicator.cli.eod_board_http import _qq_dd_root, _safe_file, send_file, send_json
+
+        rel = path
+        for prefix in ("/review/qq-dd", "/eod/qq-dd"):
+            if path == prefix or path.startswith(prefix + "/"):
+                rel = path[len(prefix) :].lstrip("/") or "index.html"
+                break
+        if rel.endswith("/"):
+            rel = rel + "index.html"
+        file_path = _safe_file(_qq_dd_root(), rel)
+        if file_path:
+            send_file(self, file_path)
+            return
+        send_json(self, {"error": "missing qq_dd_review", "file": rel, "dir": str(_qq_dd_root())}, 404)
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if path in {"/review/qq-dd", "/eod/qq-dd"} or path.startswith("/review/qq-dd/") or path.startswith("/eod/qq-dd/"):
+            if not authorized(self):
+                self._redirect("/login")
+                return
+            self._send_qq_dd(path)
+            return
+        if self._serve_ledger():
+            return
         if path == "/login":
             self._send(200, _template("login.html").encode(), "text/html; charset=utf-8")
             return
@@ -144,6 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                     "job": get_job_status(chat_id),
                     "jobs": list_active_jobs(),
+                    "show_thinking": bool(state.get("show_thinking")),
                 }
             )
             self._send(code, body, "application/json")
@@ -221,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b'{"error":"not found"}', "application/json")
 
     def do_POST(self) -> None:
+        if self._serve_ledger():
+            return
         path = urlparse(self.path).path
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
@@ -272,7 +366,20 @@ class Handler(BaseHTTPRequestHandler):
             secrets = load_secrets()
             state = load_state()
             if payload.get("api_key"):
-                secrets["cursor_api_key"] = payload["api_key"].strip()
+                candidate = payload["api_key"].strip()
+                stored_hash = secrets.get("password_hash") or ""
+                env_pw = os.environ.get("AGENT_WEB_PASSWORD", "").strip()
+                if (stored_hash and verify_password(candidate, stored_hash)) or (env_pw and candidate == env_pw):
+                    self._send(
+                        400,
+                        json.dumps(
+                            {"error": "这是网页登录密码，不是 Cursor API key。到 Dashboard 复制 key 后再保存。"},
+                            ensure_ascii=False,
+                        ).encode(),
+                        "application/json",
+                    )
+                    return
+                secrets["cursor_api_key"] = candidate
                 save_secrets(secrets)
             if payload.get("workspace"):
                 state["workspace"] = payload["workspace"].strip()
@@ -282,6 +389,8 @@ class Handler(BaseHTTPRequestHandler):
                 state["model"] = payload["model"].strip()
             if payload.get("speed") in ("default", "fast"):
                 state["speed"] = payload["speed"]
+            if "show_thinking" in payload:
+                state["show_thinking"] = bool(payload.get("show_thinking"))
             save_state(state)
             has_key = bool(secrets.get("cursor_api_key") or os.environ.get("CURSOR_API_KEY"))
             self._send(
@@ -296,6 +405,7 @@ class Handler(BaseHTTPRequestHandler):
                         "resolved_model": resolve_model(
                             state.get("model", DEFAULT_MODEL), state.get("speed", "default")
                         ),
+                        "show_thinking": bool(state.get("show_thinking")),
                     }
                 ).encode(),
                 "application/json",
@@ -514,6 +624,9 @@ class Handler(BaseHTTPRequestHandler):
             elif obj.get("type") == "text":
                 update_job(chat_id, last_event="回复中")
                 emit(obj)
+            elif obj.get("type") == "thinking":
+                update_job(chat_id, last_event="思考中")
+                emit(obj)
             else:
                 emit(obj)
 
@@ -556,11 +669,13 @@ class Handler(BaseHTTPRequestHandler):
                 finish_job(chat_id, "success")
             else:
                 finish_job(chat_id, "error", "任务失败或已中断")
+                log_agent(f"job error chat={chat_id} turn={turn.id} 任务失败或已中断")
         except Exception as exc:
             if is_stop_requested(chat_id):
                 finish_job(chat_id, "stopped")
             else:
                 finish_job(chat_id, "error", str(exc))
+                log_agent(f"job exception chat={chat_id}: {exc}")
                 emit_all({"type": "error", "text": str(exc)})
         finally:
             end_turn(chat_id, turn)

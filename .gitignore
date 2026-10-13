@@ -2,11 +2,20 @@
 secrets.json
 state.json
 .env
+.env copy
 .env.local
 .env.*.local
+tunnel.bat
+tunnel.sh
+start.bat
+start.sh
 .cloudflared/
 *.pem
+*.token
 cloudflared-credentials.json
+_cf_inspect_token.py
+_cf_probe.bat
+logs/
 
 
 

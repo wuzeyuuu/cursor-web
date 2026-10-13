@@ -7,10 +7,14 @@ import socket
 import subprocess
 import threading
 import time
+from pathlib import Path
 from urllib.parse import urlparse
+
+from collections import deque
 
 from .config import (
     AGENT_BIN,
+    AGENT_LOG_PATH,
     CHAT_ID_RE,
     DEFAULT_MODEL,
     MAX_AGENT_RETRIES,
@@ -24,13 +28,78 @@ _models_lock = threading.Lock()
 _models_cache: dict = {"ts": 0.0, "items": []}
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LOCAL_PROXY_PORTS = (7897, 7890, 10809, 20171, 10808, 1080)
+_log_lock = threading.Lock()
+_KNOWN_STREAM_TYPES = {
+    "assistant",
+    "tool_call",
+    "result",
+    "error",
+    "thinking",
+    "system",
+    "user",
+    "init",
+}
+
+
+def log_agent(msg: str) -> None:
+    line = time.strftime("%Y-%m-%d %H:%M:%S") + " " + msg.rstrip() + "\n"
+    print(line, end="", flush=True)
+    try:
+        AGENT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _log_lock:
+            with AGENT_LOG_PATH.open("a", encoding="utf-8") as fh:
+                fh.write(line)
+    except OSError:
+        pass
+
+
+_AGENT_VERSION_RE = re.compile(
+    r"^\d{4}\.\d{1,2}\.\d{1,2}(?:-\d{2}-\d{2}-\d{2})?-[a-f0-9]+$"
+)
+
+
+def _version_sort_key(name: str) -> tuple[int, str]:
+    date_part = name.split("-", 1)[0]
+    year, month, day = date_part.split(".")
+    return (int(year + month.zfill(2) + day.zfill(2)), name)
+
+
+def _node_launch(binary: Path) -> list[str] | None:
+    """Run node + index.js directly. cmd.exe /c cuts the prompt at the first newline."""
+    script_dir = binary.parent
+    local_node = script_dir / "node.exe"
+    local_index = script_dir / "index.js"
+    if local_node.is_file() and local_index.is_file():
+        return [str(local_node), str(local_index)]
+    versions = script_dir / "versions"
+    if not versions.is_dir():
+        return None
+    found: list[tuple[tuple[int, str], Path]] = []
+    try:
+        entries = list(versions.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.is_dir() or not _AGENT_VERSION_RE.match(entry.name):
+            continue
+        node = entry / "node.exe"
+        index = entry / "index.js"
+        if node.is_file() and index.is_file():
+            found.append((_version_sort_key(entry.name), entry))
+    if not found:
+        return None
+    entry = max(found, key=lambda item: item[0])[1]
+    return [str(entry / "node.exe"), str(entry / "index.js")]
 
 
 def agent_argv(args: list[str]) -> list[str]:
-    binary = str(AGENT_BIN)
-    if os.name == "nt" and binary.lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", binary, *args]
-    return [binary, *args]
+    binary = Path(AGENT_BIN)
+    if binary.suffix.lower() in (".cmd", ".bat"):
+        launch = _node_launch(binary)
+        if launch:
+            return [*launch, *args]
+        return ["cmd.exe", "/c", str(binary), *args]
+    return [str(binary), *args]
 
 
 def _subprocess_kwargs() -> dict:
@@ -272,26 +341,78 @@ def build_agent_args(state: dict, chat_id: str, text: str) -> list[str]:
     return args
 
 
+def is_context_summary_text(text: str) -> bool:
+    head = (text or "").lstrip()[:800]
+    if not head:
+        return False
+    return any(
+        marker in head
+        for marker in (
+            "<conversation_summary>",
+            "<summary_content>",
+            "Your conversation was summarized",
+            "<system_notification>",
+        )
+    )
+
+
+def _thinking_text(obj: dict) -> str:
+    text = obj.get("text")
+    if isinstance(text, str) and text:
+        return text
+    message = obj.get("message")
+    if isinstance(message, dict):
+        content = message.get("content") or []
+        parts = []
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    parts.append(str(block.get("text") or block.get("thinking") or ""))
+        elif isinstance(content, str):
+            parts.append(content)
+        return "".join(parts)
+    return ""
+
+
 def parse_stream_line(line: str) -> list[dict]:
     line = _ANSI_RE.sub("", line).strip()
     if not line:
         return []
-    if line.startswith(("RetriableError:", "Error:", "error:")):
-        msg = line
+    if line.startswith(("RetriableError:", "Error:", "error:")) or "Failed to reach the Cursor API" in line or "API key is invalid" in line:
+        msg = _ANSI_RE.sub("", line).strip()
         if "resource_exhausted" in line:
             msg = "Cursor 服务端繁忙（resource_exhausted），正在自动重试…"
-        return [{"type": "error", "text": msg, "retriable": "resource_exhausted" in line}]
+        elif "API key is invalid" in line:
+            msg = "CURSOR_API_KEY 无效。到网页设置里贴新的 key，或去 Cursor Dashboard 重新生成。"
+        elif "Failed to reach the Cursor API" in line:
+            msg = "连不上 Cursor API。先确认 Clash 7897 开着，或检查代理。"
+        return [{"type": "error", "text": msg, "retriable": "resource_exhausted" in line or "Failed to reach" in line}]
     try:
         obj = json.loads(line)
     except json.JSONDecodeError:
-        return [{"type": "text", "text": line + "\n"}]
+        log_agent("raw " + line[:400])
+        return []
     events = []
     typ = obj.get("type")
     subtype = obj.get("subtype")
-    if typ == "assistant":
+    if typ == "thinking":
+        if subtype != "completed":
+            text = _thinking_text(obj)
+            if text:
+                events.append({"type": "thinking", "text": text})
+    elif typ == "assistant":
+        if obj.get("model_call_id"):
+            return []
         content = obj.get("message", {}).get("content") or []
         for block in content:
-            if isinstance(block, dict) and block.get("text"):
+            if not isinstance(block, dict):
+                continue
+            btype = str(block.get("type") or "")
+            if btype in ("thinking", "reasoning"):
+                t = block.get("text") or block.get("thinking") or ""
+                if t:
+                    events.append({"type": "thinking", "text": t})
+            elif block.get("text") and not is_context_summary_text(block["text"]):
                 events.append({"type": "text", "text": block["text"]})
     elif typ == "tool_call":
         tool = obj.get("tool_call") or {}
@@ -301,11 +422,17 @@ def parse_stream_line(line: str) -> list[dict]:
         if obj.get("is_error"):
             result = obj.get("result") or obj.get("message") or "agent failed"
             events.append({"type": "error", "text": str(result)})
-        elif isinstance(obj.get("result"), str) and obj["result"].strip():
+        elif isinstance(obj.get("result"), str) and obj["result"].strip() and not is_context_summary_text(obj["result"]):
             events.append({"type": "text", "text": obj["result"], "from_result": True})
         events.append({"type": "done"})
     elif typ == "error":
-        events.append({"type": "error", "text": str(obj.get("message") or obj)})
+        msg = obj.get("message") or obj.get("error") or obj.get("text")
+        if isinstance(msg, dict):
+            msg = msg.get("message") or msg.get("error") or ""
+        if msg:
+            events.append({"type": "error", "text": str(msg)})
+    elif typ not in _KNOWN_STREAM_TYPES:
+        log_agent(f"unhandled stream type={typ!r} subtype={subtype!r}")
     return events
 
 
@@ -325,27 +452,47 @@ def run_agent_stream(args: list[str], emit, chat_id: str | None = None) -> tuple
     assert proc.stdout is not None
     saw_done = False
     saw_text = False
+    saw_error = False
     retriable = False
+    tail = deque(maxlen=20)
+    emitted_parts: list[str] = []
+    prompt = args[-1] if args else ""
+    log_agent(
+        f"start chat={chat_id or '-'} model={next((args[i + 1] for i, a in enumerate(args) if a == '--model'), '-')} "
+        f"prompt={prompt[:80]!r}"
+    )
     try:
         for line in proc.stdout:
             if is_stop_requested(chat_id):
                 break
+            tail.append(line.rstrip()[:500])
             for ev in parse_stream_line(line):
                 if ev.get("type") == "done":
                     saw_done = True
                 if ev.get("type") == "text":
-                    if ev.get("from_result") and saw_text:
+                    text = ev.get("text") or ""
+                    if ev.get("from_result"):
+                        joined = "".join(emitted_parts)
+                        if saw_text or (joined and text.replace("\n", "") == joined.replace("\n", "")):
+                            continue
+                    elif text in emitted_parts:
                         continue
+                    else:
+                        emitted_parts.append(text)
                     saw_text = True
+                if ev.get("type") == "error" and not ev.get("retriable"):
+                    saw_error = True
                 if ev.get("retriable"):
                     retriable = True
                 emit(ev)
         if is_stop_requested(chat_id):
+            log_agent(f"stop chat={chat_id or '-'}")
             return False, False
         proc.wait(timeout=15)
     except Exception as exc:
         if is_stop_requested(chat_id):
             return False, False
+        log_agent(f"exception chat={chat_id or '-'}: {exc}")
         emit({"type": "error", "text": str(exc)})
         try:
             proc.kill()
@@ -354,12 +501,21 @@ def run_agent_stream(args: list[str], emit, chat_id: str | None = None) -> tuple
         return False, False
     finally:
         set_job_proc(chat_id, None)
-    success = proc.returncode == 0 and saw_done and saw_text
+    success = proc.returncode == 0 and saw_done and not saw_error
+    log_agent(
+        f"end chat={chat_id or '-'} code={proc.returncode} done={saw_done} text={saw_text} "
+        f"err={saw_error} retry={retriable} success={success}"
+    )
+    if not success and tail:
+        log_agent("tail " + " | ".join(tail)[-800:])
     if proc.returncode != 0 and not saw_done:
         if not retriable:
             emit({"type": "error", "text": f"agent exit {proc.returncode}"})
         else:
             retriable = True
+    elif proc.returncode == 0 and not saw_done and not saw_text:
+        emit({"type": "error", "text": "agent 没有返回 result 事件（可能中途断流）"})
+        log_agent(f"missing result event chat={chat_id or '-'}")
     return success, retriable
 
 
@@ -370,6 +526,7 @@ def stream_chat_with_retries(
         if is_stop_requested(chat_id):
             return False
         if attempt > 1:
+            log_agent(f"retry {attempt}/{MAX_AGENT_RETRIES} chat={chat_id or '-'}")
             update_job(chat_id, last_event=f"重试 {attempt}/{MAX_AGENT_RETRIES}")
             emit_all({"type": "tool", "text": f"重试 {attempt}/{MAX_AGENT_RETRIES}…"})
             emit_job()

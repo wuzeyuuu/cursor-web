@@ -1,0 +1,24 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+
+rem Copy this file to tunnel.bat and set PUBLIC_URL.
+rem tunnel.bat is gitignored so your hostname is not uploaded.
+
+set "PUBLIC_URL=https://YOUR-HOST.example.com"
+set "ORIGIN=http://127.0.0.1:8786"
+
+echo Named Cloudflare Tunnel should already run as Windows service "cloudflared".
+echo Do NOT start a Quick Tunnel (trycloudflare.com changes every time, no SSE).
+echo.
+echo Public hostname in Zero Trust -^> Tunnels -^> your tunnel -^> Public Hostname:
+echo   Type HTTP  (not HTTPS)
+echo   URL 127.0.0.1:8786
+echo.
+sc query cloudflared | findstr /I "STATE"
+curl.exe -s -o nul -w "local 8786: HTTP %%{http_code}\n" --max-time 5 "%ORIGIN%/login"
+echo.
+echo Keep start.bat running, then open:
+echo   %PUBLIC_URL%/login
+echo.
+pause

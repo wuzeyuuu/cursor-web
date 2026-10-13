@@ -165,6 +165,18 @@ def dedupe_messages(messages: list[dict]) -> list[dict]:
 
 def is_system_user_blob(content) -> bool:
     raw = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+    # Compaction and task notices are stored as user rows. They often embed an
+    # older <user_query>, which would otherwise show up as a reordered turn.
+    if any(
+        marker in raw
+        for marker in (
+            "<conversation_summary>",
+            "<summary_content>",
+            "Your conversation was summarized",
+            "<system_notification>",
+        )
+    ):
+        return True
     if "<user_query>" in raw:
         return False
     return any(

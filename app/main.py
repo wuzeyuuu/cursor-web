@@ -2,10 +2,20 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
+import threading
 from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[3]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from daily_indicator.review.ledger_server import migrate_root_daily_files  # noqa: E402
+from daily_indicator.review.universe import get_universe  # noqa: E402
 
 from .auth import ensure_password_configured
-from .config import AGENT_BIN, HOST, PORT, agent_install_hint
+from .config import AGENT_BIN, AGENT_LOG_PATH, HOST, PORT, agent_install_hint
 from .http_handler import Handler
 from .store import load_state
 
@@ -47,11 +57,26 @@ def main() -> None:
         print("Web UI will still start; sending a prompt will fail until agent is installed.\n", flush=True)
     ensure_password_configured()
     httpd = _make_server(HOST, PORT)
+    migrate_root_daily_files()
+
+    def _warm_board() -> None:
+        try:
+            payload = get_universe()
+            print(f"board universe: {payload.get('count')}", flush=True)
+        except Exception as exc:
+            print(f"board universe warmup failed: {exc}", flush=True)
+
+    threading.Thread(target=_warm_board, daemon=True).start()
     print(f"listening on http://{HOST}:{PORT}/login", flush=True)
     print(f"open:      http://127.0.0.1:{PORT}/login", flush=True)
+    print(f"review:    http://127.0.0.1:{PORT}/review/", flush=True)
+    print(f"pools:     http://127.0.0.1:{PORT}/reviewpools", flush=True)
+    print(f"qq-dd:     http://127.0.0.1:{PORT}/eod/qq-dd/", flush=True)
+    print(f"eod:       http://127.0.0.1:{PORT}/eod/", flush=True)
     print(f"agent:     {AGENT_BIN}", flush=True)
     print(f"workspace: {load_state()['workspace']}", flush=True)
     print("Set AGENT_WEB_PASSWORD to change the web login password.", flush=True)
+    print(f"agent log: {AGENT_LOG_PATH}", flush=True)
     print("Paste CURSOR_API_KEY in the page settings. Do not put the key in chat.", flush=True)
     try:
         httpd.serve_forever()

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = ROOT / "state.json"
 SECRETS_PATH = ROOT / "secrets.json"
 TEMPLATES_DIR = ROOT / "templates"
+AGENT_LOG_PATH = ROOT / "logs" / "agent.log"
 
 
 def load_dotenv(path: Path | None = None) -> None:

@@ -37,7 +37,7 @@
   .session-item .badge.run { color:#9ece6a; border-color:#3d5a3d; }
   .session-item .badge.wait { color:#e0af68; border-color:#6a5330; }
   #chatHead .ide-note { color:var(--acc); }
-  .chat-pane { flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden; padding:6px 8px calc(76px + env(safe-area-inset-bottom)); }
+  .chat-pane { flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden; padding:6px 8px 8px; }
   #chatHead { font-size:10px; color:var(--muted); margin-bottom:4px; padding-bottom:4px; border-bottom:1px solid var(--line); line-height:1.3; }
   #chatHead strong { color:var(--txt); font-size:11px; }
   #loadMore { text-align:center; margin:3px 0; }
@@ -65,7 +65,7 @@
   #taskStatus .label { font-weight:600; }
   #taskStatus .detail { color:var(--muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
-  #log { display:flex; flex-direction:column; gap:5px; flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-bottom:4px; font-size:12px; }
+  #log { display:flex; flex-direction:column; gap:5px; flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-bottom:10px; font-size:12px; }
   .msg { padding:6px 8px; border-radius:8px; white-space:pre-wrap; word-break:break-word; line-height:1.35; font-size:12px; }
   .msg.md { white-space:normal; }
   .msg.md p { margin:0 0 8px; white-space:pre-wrap; }
@@ -85,12 +85,18 @@
   .msg.md a { color:var(--acc); }
   .user { background:#243044; align-self:flex-end; max-width:92%; }
   .bot { background:var(--card); border:1px solid var(--line); align-self:flex-start; max-width:92%; }
+  .think { color:#8b93a7; font-size:10px; font-family:ui-monospace,monospace; align-self:flex-start; max-width:92%; border-style:dashed; }
+  .think summary { cursor:pointer; color:#9aa3b2; }
+  .think .body { white-space:pre-wrap; max-height:28vh; overflow:auto; margin-top:4px; }
+  body:not(.show-process) .msg.tool { display:none; }
   .tool { color:var(--muted); font-size:9px; font-family:ui-monospace,monospace; align-self:center; padding:3px 6px; }
-  footer { position:fixed; left:0; right:0; bottom:0; z-index:30; padding:5px 8px calc(5px + env(safe-area-inset-bottom)); background:linear-gradient(transparent, var(--bg) 18%); border-top:1px solid var(--line); }
+  .composer-bar label.toggle { display:inline-flex; align-items:center; gap:4px; color:var(--muted); font-size:10px; font-weight:500; white-space:nowrap; }
+  .composer-bar label.toggle input { width:auto; }
+  footer { position:relative; flex-shrink:0; z-index:30; padding:5px 8px calc(5px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line); }
   .composer-bar { display:flex; gap:5px; max-width:900px; margin:0 auto 4px; align-items:center; flex-wrap:wrap; }
   #mode, #model, #speed { width:auto; min-width:96px; flex:1 1 96px; max-width:180px; font-size:11px; padding:5px 7px; }
   #composer { display:flex; gap:5px; max-width:900px; margin:0 auto; align-items:flex-end; }
-  #prompt { min-height:32px; max-height:90px; resize:none; font-size:12px; line-height:1.3; }
+  #prompt { min-height:32px; max-height:160px; resize:none; font-size:12px; line-height:1.3; }
   details.settings { padding:5px 8px; border-bottom:1px solid var(--line); font-size:11px; flex-shrink:0; max-height:40vh; overflow:auto; }
   details.settings summary { font-size:11px; }
   .hint { color:var(--muted); font-size:9px; margin:3px 0 5px; }
@@ -137,7 +143,7 @@
     <summary>设置</summary>
     <div style="padding:8px 0">
       <p class="sub">API key 在 Cursor Dashboard → API Keys 生成。粘贴后点「保存」。</p>
-      <input id="apiKey" type="password" placeholder="粘贴 CURSOR_API_KEY" autocomplete="off"/>
+      <input id="apiKey" name="cursor_api_key" type="text" placeholder="粘贴 CURSOR_API_KEY，不是登录密码" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" readonly/>
       <div class="row">
         <input id="workspace" placeholder="workspace 路径"/>
       </div>
@@ -164,7 +170,7 @@
       <div id="chatHead">请选一个会话，或新建</div>
       <div id="loadMore" hidden><button class="ghost" type="button" id="loadMoreBtn">加载更早消息</button></div>
       <div id="log"><div class="empty">点「会话」选一条，或新建</div></div>
-      <div class="hint">Enter 发送 · 忙碌时排队 · 排队条可撤销 / 修改 / 硬入（打断当前立刻跑这条）</div>
+      <div class="hint">Enter 发送 · Ctrl+Enter 换行 · 忙碌时排队 · 排队条可撤销 / 修改 / 硬入（打断当前立刻跑这条）</div>
     </section>
   </div>
 </main>
@@ -180,6 +186,9 @@
       <option value="default">标准</option>
       <option value="fast">快速</option>
     </select>
+    <label class="toggle" title="默认只显示最终回复。打开后显示思考和工具调用。">
+      <input type="checkbox" id="showProcess"/>显示过程
+    </label>
     <span id="modeHint" class="hint" style="margin:0;flex:1 1 100%"></span>
   </div>
   <form id="composer">
@@ -218,6 +227,17 @@ let sessionOrder = [];
 let sessionEtag = "";
 let historyOldestRowid = null;
 let historyLatestRowid = null;
+
+function applyProcessUi(on) {
+  document.body.classList.toggle("show-process", !!on);
+  const box = $("showProcess");
+  if (box) box.checked = !!on;
+  try { localStorage.setItem("showProcess", on ? "1" : "0"); } catch {}
+}
+
+function processPref() {
+  try { return localStorage.getItem("showProcess") === "1"; } catch { return false; }
+}
 
 function openSessions() {
   document.body.classList.add("sessions-open");
@@ -386,17 +406,8 @@ function anyJobActive() {
   return [...jobsByChat.values()].some((j) => j.state === "running" || j.state === "queued") || [...liveByChat.values()].some((list) => list.some((s) => s.alive));
 }
 
-function scheduleStatusPoll(active) {
+function scheduleStatusPoll(_active) {
   if (statusPollTimer) { clearInterval(statusPollTimer); statusPollTimer = null; }
-  const ms = active ? 1500 : 5000;
-  statusPollTimer = setInterval(async () => {
-    const r = await fetch("/api/status", {headers: headers()}).catch(() => null);
-    if (!r?.ok) return;
-    const s = await r.json();
-    rememberJobs(s.jobs, s.job);
-    renderTaskStatus(currentJob());
-    if (!anyJobActive()) scheduleStatusPoll(false);
-  }, ms);
 }
 
 function fmtTime(ms) {
@@ -540,6 +551,45 @@ function renderMarkdown(src) {
   return out.join("") || "<p></p>";
 }
 
+function evText(ev) {
+  const text = ev && ev.text;
+  return typeof text === "string" ? text : (text == null ? "" : String(text));
+}
+
+function isPlaceholder(text) {
+  const raw = text || "";
+  return raw.startsWith("排队") || raw.startsWith("正在启动");
+}
+
+function mergeThink(prev, next) {
+  next = next || "";
+  if (!next) return prev || "";
+  if (!prev) return next;
+  if (next.startsWith(prev) || next.endsWith(prev)) return next;
+  if (prev.startsWith(next) || prev.endsWith(next)) return prev;
+  return prev + next;
+}
+
+function ensureThink(live) {
+  if (live.think && live.think.isConnected) return live.think;
+  const el = document.createElement("details");
+  el.className = "msg think";
+  el.innerHTML = "<summary>思考</summary><div class=\"body\"></div>";
+  live.think = el;
+  if (live.bot && live.bot.parentNode) live.bot.parentNode.insertBefore(el, live.bot);
+  else $("log").appendChild(el);
+  return el;
+}
+
+function appendThink(live, text) {
+  const el = ensureThink(live);
+  const prev = el.dataset.raw || "";
+  const next = mergeThink(prev, text);
+  el.dataset.raw = next;
+  const body = el.querySelector(".body");
+  if (body) body.textContent = next;
+}
+
 function fillMarkdown(el, text) {
   el.dataset.raw = text;
   el.classList.add("md");
@@ -629,8 +679,16 @@ function applyHistory(data, mode) {
     const empty = $("log").querySelector(".empty");
     if (empty) empty.remove();
     for (const m of msgs) {
+      const raw = (m.text || "").trim();
       const key = (m.role === "user" ? "user" : "bot") + "\n" + m.text;
       if (have.has(key)) continue;
+      if (m.role !== "user" && raw) {
+        const dup = [...$("log").querySelectorAll(".msg.bot")].some((el) => {
+          const haveRaw = (msgRaw(el) || "").trim();
+          return haveRaw && (haveRaw === raw || haveRaw.endsWith(raw) || raw.endsWith(haveRaw));
+        });
+        if (dup) continue;
+      }
       addMsg(m.role === "user" ? "user" : "bot", m.text, m.rowid);
     }
   }
@@ -766,6 +824,8 @@ async function refreshStatus() {
   $("workspace").value = s.workspace || "";
   $("mode").value = mode;
   $("speed").value = speed;
+  if (typeof s.show_thinking === "boolean") applyProcessUi(s.show_thinking);
+  else applyProcessUi(processPref());
   if (!$("model").options.length) await loadModels(model);
   else if ([...$("model").options].some((o) => o.value === model)) $("model").value = model;
   updateModeHint(mode, model, speed, s.resolved_model);
@@ -805,6 +865,7 @@ async function saveComposerSettings(fields = {}) {
     mode: $("mode").value,
     model: $("model").value,
     speed: $("speed").value,
+    show_thinking: $("showProcess") ? $("showProcess").checked : false,
   }, fields);
   const r = await fetch("/api/settings", {method:"POST", headers: headers(), body: JSON.stringify(body)});
   const s = await r.json();
@@ -827,10 +888,15 @@ async function saveModelSpeed() {
   await saveComposerSettings();
 }
 
+$("apiKey").addEventListener("focus", () => { $("apiKey").readOnly = false; });
 $("save").onclick = () => saveSettings({requireKey: true});
 $("mode").onchange = saveMode;
 $("model").onchange = saveModelSpeed;
 $("speed").onchange = saveModelSpeed;
+$("showProcess").onchange = () => {
+  applyProcessUi($("showProcess").checked);
+  saveComposerSettings();
+};
 $("logout").onclick = async () => {
   await fetch("/api/logout", {method:"POST", headers: headers()});
   location.href = "/login";
@@ -877,7 +943,7 @@ $("loadMoreBtn").onclick = async () => {
 };
 
 $("prompt").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
+  if (e.key === "Enter" && !(e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     $("composer").requestSubmit();
   }
@@ -889,10 +955,6 @@ $("composer").onsubmit = async (e) => {
   e.preventDefault();
   const text = $("prompt").value.trim();
   if (!text) return;
-  if ($("apiKey").value.trim()) {
-    const ok = await saveSettings();
-    if (!ok) { alert("请先保存 API key"); return; }
-  }
   let st = await fetch("/api/status", {headers: headers()}).then(r => r.json()).catch(() => ({}));
   if (!st.has_key) { alert("还没配置 API key"); return; }
   if (!currentChatId && !st.chat_id) {
@@ -903,7 +965,7 @@ $("composer").onsubmit = async (e) => {
   const chatId = currentChatId || st.chat_id;
   $("prompt").value = "";
   const userEl = addMsg("user", text);
-  const bot = addMsg("bot", "排队中 / 正在启动…");
+  const bot = addMsg("bot", "排队中…");
   const abort = new AbortController();
   const live = {chatId, user: userEl, bot, abort, alive: true, prompt: text, turnId: null};
   if (!liveByChat.has(chatId)) liveByChat.set(chatId, []);
@@ -951,6 +1013,7 @@ $("composer").onsubmit = async (e) => {
         const line = p.split("\n").filter(x => x.startsWith("data:")).map(x => x.slice(5).trim()).join("");
         if (!line) continue;
         let ev; try { ev = JSON.parse(line); } catch { continue; }
+        try {
         if (ev.type === "job") {
           if (ev.turn_id) live.turnId = ev.turn_id;
           applyJobEvent(ev);
@@ -963,9 +1026,10 @@ $("composer").onsubmit = async (e) => {
             }
           } else if (ev.state === "running") {
             hideQueueActions(live);
-            if ((bot.dataset.raw || bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动") || (bot.textContent || "").startsWith("排队中")) {
-              bot.textContent = "正在启动 agent…";
-              bot.dataset.raw = "正在启动 agent…";
+            if (isPlaceholder(bot.dataset.raw || bot.textContent || "")) {
+              bot.textContent = "";
+              bot.dataset.raw = "";
+              bot.classList.remove("md");
             }
           } else if (ev.state === "cancelled") {
             hideQueueActions(live);
@@ -1005,28 +1069,48 @@ $("composer").onsubmit = async (e) => {
             updateChatHead(preview, ev.chat_id, "cli");
             loadSessions(ev.chat_id);
           }
+        } else if (ev.type === "thinking") {
+          appendThink(live, evText(ev));
         } else if (ev.type === "text") {
           let raw = bot.dataset.raw || "";
-          if (raw.startsWith("排队") || raw.startsWith("正在启动") || (bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动")) raw = "";
-          fillMarkdown(bot, raw + ev.text);
+          if (isPlaceholder(raw) || isPlaceholder(bot.textContent || "")) raw = "";
+          const next = evText(ev);
+          if (!next) {
+            /* ignore empty text */
+          } else if (raw && (next === raw || raw.endsWith(next))) {
+            /* already have this snapshot / result replay */
+          } else if (raw && next.startsWith(raw)) {
+            fillMarkdown(bot, next);
+          } else {
+            fillMarkdown(bot, raw + next);
+          }
           if (currentChatId === chatId && !bot.isConnected) $("log").appendChild(bot);
         } else if (ev.type === "tool") {
-          if (currentChatId === chatId) addMsg("tool", ev.text);
+          if (currentChatId === chatId) addMsg("tool", evText(ev));
         } else if (ev.type === "error") {
-          let raw = bot.dataset.raw || bot.textContent || "";
-          if (raw.startsWith("排队") || raw.startsWith("正在启动")) raw = "";
-          fillMarkdown(bot, raw + "\n" + ev.text);
+          const msg = evText(ev).trim();
+          if (msg) {
+            let raw = bot.dataset.raw || "";
+            if (isPlaceholder(raw)) raw = "";
+            fillMarkdown(bot, raw ? (raw + "\n" + msg) : msg);
+          }
         } else if (ev.type === "done") {
           live.alive = false;
           refreshStatus();
         }
+        } catch (err) {
+          console.error(err);
+        }
       }
     }
   } catch (err) {
-    if (!(err && err.name === "AbortError")) {
-      bot.textContent += "\n" + String(err);
-    } else if ((bot.textContent || "").startsWith("排队") || (bot.textContent || "").startsWith("正在启动")) {
-      bot.textContent = "已终止";
+    if (err && err.name === "AbortError") {
+      if (isPlaceholder(bot.dataset.raw || bot.textContent || "")) {
+        bot.textContent = "已终止";
+        bot.dataset.raw = "已终止";
+      }
+    } else {
+      console.error(err);
     }
   }
   live.alive = false;
@@ -1042,6 +1126,7 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 (async () => {
+  applyProcessUi(processPref());
   const s = await refreshStatus();
   if (s?.chat_id) {
     currentChatId = s.chat_id;

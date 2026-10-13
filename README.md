@@ -103,16 +103,20 @@ Open `http://127.0.0.1:8786/login`.
 
 ## Cloudflare Tunnel (public HTTPS URL)
 
-This app must stay on **this machine** (it shells out to local `agent`). Do not deploy it as a Worker. The Windows service `cloudflared` already runs named tunnel **cursor** (`27a9add3-53d2-45bf-8cfd-b2ba1a3b6853`). Do not run Quick Tunnels (`trycloudflare.com`); those URLs change and do not support SSE.
+This app must stay on **this machine** (it shells out to local `agent`). Do not deploy it as a Worker. Use a named Cloudflare Tunnel. Do not commit the tunnel token or your real hostname scripts.
 
-Add a public hostname once (Zero Trust → Networks → Tunnels → **cursor** → Public Hostname):
+```bat
+copy tunnel.bat.example tunnel.bat
+copy start.bat.example start.bat
+```
 
-- Subdomain: `cursor`
-- Domain: `klinedance.kdns.fr` (also active: `klinedance.dpdns.org`)
-- Type: HTTP
-- URL: `127.0.0.1:8786`
+```bash
+cp tunnel.sh.example tunnel.sh
+cp start.sh.example start.sh
+chmod +x start.sh tunnel.sh
+```
 
-Then keep `start.bat` running and open `https://cursor.klinedance.kdns.fr/login`. `tunnel.bat` only prints this status; it does not start another tunnel.
+Edit `PUBLIC_URL` in `tunnel.bat` / `tunnel.sh` (or `TUNNEL_PUBLIC_URL` in `.env`). Add a public hostname once (Zero Trust → Networks → Tunnels → your tunnel → Public Hostname): Type **HTTP** (not HTTPS), URL `127.0.0.1:8786`. Keep `start.bat` / `start.sh` running, then open `https://YOUR-HOST/login`. The local `tunnel.*` scripts only print status; they do not start another tunnel.
 
 This exposes an agent that can edit files. Keep the web password, prefer Cloudflare Access on the hostname, and do not share the URL.
 
@@ -127,8 +131,8 @@ If you copied `secrets.json` from another machine, the old password hash still w
 
 ## GitHub publish checklist
 
-1. Copy `.env.example` → `.env` locally. Do not copy real secrets into the example files.
-2. Confirm `.gitignore` ignores `secrets.json`, `state.json`, `.env`.
+1. Copy `.env.example` → `.env`, `*.example` launch scripts → `start.bat` / `start.sh` / `tunnel.bat` / `tunnel.sh`. Do not copy real secrets or hostnames into the example files.
+2. Confirm `.gitignore` ignores `secrets.json`, `state.json`, `.env`, `start.bat`, `start.sh`, `tunnel.bat`, `tunnel.sh`.
 3. `git status` must not list API keys, password hashes, session tokens, or machine-specific paths (`/mnt/...`, `/workspace/...`).
 4. Keep `secrets.example.json` and `state.example.json` empty of credentials.
 5. Do not commit Cursor chat databases under `~/.cursor/chats`.
